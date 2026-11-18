@@ -97,3 +97,5 @@ channel.upstream_update_failed_channels: "Failed channel IDs (showing {{.Shown}}
 channel.upstream_update_more_omitted: " ({{.Count}} more omitted)"
 
 channel.notify_scheduled_subject: "Channel \"{{.Name}}\" (#{{.Id}}) plugin notification"
+relay.auto_pool_context_limit: "The request and output limit exceed the selected model's context window. Reduce the input or output limit."
+relay.auto_pool_price_required: "The selected auto pool model has no configured price. Contact the gateway administrator."

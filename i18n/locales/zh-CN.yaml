@@ -98,3 +98,5 @@ channel.upstream_update_failed_channels: "失败渠道 ID（展示 {{.Shown}}/{{
 channel.upstream_update_more_omitted: "（其余 {{.Count}} 个已省略）"
 
 channel.notify_scheduled_subject: "渠道“{{.Name}}” (#{{.Id}}) 插件通知"
+relay.auto_pool_context_limit: "输入内容与输出上限超出所选模型的上下文窗口，请缩短输入或降低输出上限。"
+relay.auto_pool_price_required: "所选自动池模型尚未配置价格，请联系网关管理员。"

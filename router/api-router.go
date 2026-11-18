@@ -288,6 +288,10 @@ func SetApiRouter(router *gin.Engine) {
 			requestPluginRoute.POST("/dry_run", controller.DryRunRequestPlugins)
 		}
 		registerChannelRoutes(apiRouter)
+		autoPoolRoute := apiRouter.Group("/auto_pool", middleware.AdminAuth(), middleware.DisableCache())
+		handlePermissionRoute(autoPoolRoute, http.MethodGet, "/", authz.ChannelRead, controller.GetAutoPool)
+		handlePermissionRoute(autoPoolRoute, http.MethodPut, "/", authz.ChannelWrite, controller.UpdateAutoPool)
+		handlePermissionRoute(autoPoolRoute, http.MethodPost, "/probe/:id", authz.ChannelOperate, controller.ProbeAutoPoolMember)
 		registerAuthzRoutes(apiRouter)
 		tokenRoute := apiRouter.Group("/token")
 		tokenRoute.Use(middleware.UserAuth())

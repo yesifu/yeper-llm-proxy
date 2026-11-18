@@ -5,6 +5,7 @@ import (
 	"context"
 	"embed"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -107,6 +108,7 @@ func main() {
 		go model.SyncChannelCache(common.SyncFrequency)
 	}
 	wsmanager.StartSubscriber(context.Background())
+	controller.StartAutoPoolHealthWorker(context.Background())
 
 	// Warm pricing after channel cache initialization so Advanced Custom
 	// endpoint inference can read cached route settings on first request.
@@ -357,6 +359,9 @@ func InitResources() error {
 		}
 	}
 
+	if err = model.BootstrapAdminFromEnv(); err != nil {
+		return fmt.Errorf("initialize administrator from environment: %w", err)
+	}
 	model.CheckSetup()
 
 	// Initialize options, should after model.InitDB()

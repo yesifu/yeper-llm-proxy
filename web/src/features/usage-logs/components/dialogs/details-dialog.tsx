@@ -1204,6 +1204,20 @@ export function DetailsDialog(props: DetailsDialogProps) {
           />
         )}
 
+        {other?.requested_model && (
+          <DetailSection label={t('Auto model pool')}>
+            <DetailRow
+              label={t('Request Model')}
+              value={other.requested_model}
+              mono
+            />
+            <DetailRow
+              label={t('Actual Model')}
+              value={other.billing_model || props.log.model_name}
+              mono
+            />
+          </DetailSection>
+        )}
         {other?.response_model && (
           <DetailSection label={t('Response Model')}>
             <ResponseModelDetails observation={other.response_model} />

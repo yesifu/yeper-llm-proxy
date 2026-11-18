@@ -72,6 +72,16 @@ func AppendRelayLogAdminInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 		return
 	}
 	other.SetAdmin("use_channel", ctx.GetStringSlice("use_channel"))
+	if selected := GetAutoPoolSelection(ctx); selected != nil && relayInfo != nil {
+		other.SetPublic("requested_model", relayInfo.OriginModelName)
+		other.SetPublic("billing_model", relayInfo.GetBillingModelName())
+		other.SetPublic("upstream_model_name", selected.ActualModel)
+		other.SetAdmin("auto_pool_member", selected.Member.ID)
+		other.SetAdmin("auto_pool_resource", selected.Member.ResourceKey)
+		if attempts, ok := ctx.Get("auto_pool_billing_attempts"); ok {
+			other.SetAdmin("auto_pool_attempts", attempts)
+		}
+	}
 	if relayInfo != nil {
 		if billingModel := relayInfo.GetBillingModelName(); billingModel != "" && billingModel != relayInfo.OriginModelName {
 			other.SetAdmin("billing_model", billingModel)

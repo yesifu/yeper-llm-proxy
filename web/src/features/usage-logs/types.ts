@@ -291,6 +291,8 @@ export interface LogOtherData {
   cache_creation_ratio_12h?: number
   is_model_mapped?: boolean
   upstream_model_name?: string
+  requested_model?: string
+  billing_model?: string
   // Diagnostic only. Whether the names disagree is derived in the UI via
   // isResponseModelMismatch so old rows follow the current comparison rule.
   response_model?: {

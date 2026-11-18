@@ -95,6 +95,9 @@ func CountRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *relayco
 	}
 
 	model := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
+	if selected := GetAutoPoolSelection(c); selected != nil {
+		model = selected.ActualModel
+	}
 	tkm := 0
 
 	if meta.TokenType == types.TokenTypeTextNumber {

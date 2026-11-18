@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relay"
@@ -275,6 +276,26 @@ func ListModels(c *gin.Context, modelType int) {
 			continue
 		}
 		userModelNames = append(userModelNames, modelName)
+	}
+	// The automatic model is virtual: it need not be advertised by every
+	// channel or have its own price. Actual member models provide pricing.
+	if modelType != constant.ChannelTypeAnthropic && modelType != constant.ChannelTypeGemini &&
+		(!modelLimitEnable || middleware.TokenModelLimitAllows(tokenModelLimit, service.AutoPoolModel)) {
+		pool, poolErr := service.GetAutoPoolConfig()
+		if poolErr == nil && pool.Enabled {
+			for _, member := range pool.Members {
+				channel, channelErr := model.CacheGetChannel(member.ChannelID)
+				if channelErr != nil || channel == nil || channel.Status != common.ChannelStatusEnabled || !service.AutoPoolChannelCompatible(channel) || !helper.HasModelBillingConfig(member.ActualModel) {
+					continue
+				}
+				if slices.ContainsFunc(ownerGroups, func(group string) bool { return slices.Contains(channel.GetGroups(), group) }) {
+					if !slices.Contains(userModelNames, service.AutoPoolModel) {
+						userModelNames = append(userModelNames, service.AutoPoolModel)
+					}
+					break
+				}
+			}
+		}
 	}
 
 	ownerByModel := map[string]string{}

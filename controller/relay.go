@@ -212,6 +212,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 		service.AppendUsedChannel(c, channel.Id)
+		if service.GetAutoPoolSelection(c) != nil && retryParam.GetRetry() > 0 {
+			if newAPIError = relay.PrepareRequestBilling(c, relayInfo); newAPIError != nil {
+				break
+			}
+		}
 		if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
 			newAPIError = billingErr
 			break
@@ -245,6 +250,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		finishReply()
 
 		if newAPIError == nil {
+			if relayInfo.StreamStatus == nil || relayInfo.StreamStatus.IsNormalEnd() && !relayInfo.StreamStatus.HasErrors() && !relayInfo.StreamStatus.ResponseFailed() {
+				service.RecordAutoPoolSuccess(c)
+			}
 			service.MarkRequestPolicySuccess(c, relayInfo.StreamStatus)
 			relayInfo.LastError = nil
 			return
@@ -254,6 +262,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		relayInfo.LastError = newAPIError
 
 		decision := service.DecideRelayRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry())
+		if service.GetAutoPoolSelection(c) != nil && c.Writer.Written() {
+			// Never concatenate two models' answers or tool calls after any
+			// part of a response has been committed to the client.
+			decision = service.PolicyDecision{Action: "stop", Reason: "response_started", Source: "auto_pool"}
+		}
 		service.RecordPolicyFailure(c, channel.Id, newAPIError, decision)
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, relayInfo)
 

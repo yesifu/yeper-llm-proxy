@@ -117,6 +117,9 @@ func (p *RetryParam) ResetRetryNextTry() {
 //	Retry=3: GroupB, priority1 (startRetryIndex=2, priorityRetry=1)
 //	         分组B, 优先级1
 func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, error) {
+	if IsAutoPoolModel(param.ModelName) {
+		return SelectAutoPoolChannel(param.Ctx, param.ModelName, param.TokenGroup)
+	}
 	var channel *model.Channel
 	var err error
 	selectGroup := param.TokenGroup
@@ -301,6 +304,13 @@ type ChannelSelectError struct {
 // filters. The group the channel was chosen from is returned for auto-group
 // callers. The caller still applies SetupContextForSelectedChannel.
 func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam) (*model.Channel, string, *ChannelSelectError) {
+	if IsAutoPoolModel(modelName) {
+		channel, group, err := SelectAutoPoolChannel(c, modelName, retry.TokenGroup)
+		if err != nil {
+			return nil, group, &ChannelSelectError{StatusCode: http.StatusServiceUnavailable, Code: "auto_pool_unavailable", Message: err.Error()}
+		}
+		return channel, group, nil
+	}
 	constraints := GetChannelConstraints(c)
 	if pin, found, overridden := constraints.ResolvedPin(); found {
 		for _, lost := range overridden {

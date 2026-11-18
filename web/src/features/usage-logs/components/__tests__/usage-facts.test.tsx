@@ -94,6 +94,16 @@ function rowValue(label: string): string | null {
   return screen.getByText(label).nextElementSibling?.textContent ?? null
 }
 
+test('shows the requested auto alias separately from the actual billing model', () => {
+  const queryClient = renderDetails({
+    requested_model: 'llm-auto',
+    billing_model: 'qwen3',
+  })
+  expect(rowValue('Request Model')).toBe('llm-auto')
+  expect(rowValue('Actual Model')).toBe('qwen3')
+  queryClient.clear()
+})
+
 test('shows the recorded request and response models in log details', () => {
   const queryClient = renderDetails({
     response_model: {

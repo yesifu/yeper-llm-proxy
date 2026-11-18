@@ -1,0 +1,47 @@
+ARG BUN_IMAGE=docker.m.daocloud.io/oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d
+ARG GO_IMAGE=docker.m.daocloud.io/library/golang:1.26.10-alpine@sha256:9ce231b28998b32e116927c61aa5c406183061d4f3f2d61b292c88e7f6bdf7ca
+ARG RUNTIME_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim@sha256:f06537653ac770703bc45b4b113475bd402f451e85223f0f2837acbf89ab020a
+
+FROM ${BUN_IMAGE} AS web-builder
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+WORKDIR /build/web
+COPY web/package.json web/bun.lock ./
+RUN printf 'registry=%s\n' "$NPM_REGISTRY" > .npmrc && bun install --frozen-lockfile
+COPY web/ ./
+COPY VERSION /build/VERSION
+RUN VITE_REACT_APP_VERSION=$(cat /build/VERSION) bun run build
+
+FROM ${GO_IMAGE} AS go-builder
+ARG GOPROXY=https://goproxy.cn,direct
+ARG TARGETOS=linux
+ARG TARGETARCH
+ENV CGO_ENABLED=0 GOWORK=off GO111MODULE=on GOEXPERIMENT=greenteagc
+ENV GOPROXY=${GOPROXY}
+WORKDIR /build
+COPY go.mod go.sum ./
+COPY relaykit/go.mod ./relaykit/go.mod
+COPY tokenkit/go.mod ./tokenkit/go.mod
+RUN go mod download
+COPY . .
+COPY --from=web-builder /build/web/dist ./web/dist
+RUN GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-$(go env GOARCH)} \
+    go build -pgo="$(go list -m -f '{{.Dir}}' github.com/MoeForge/moejs)/default.pgo" \
+    -trimpath -ldflags "-s -w -X github.com/QuantumNous/new-api/common.Version=$(cat VERSION)-gateway" \
+    -o /build/new-api .
+
+FROM ${RUNTIME_IMAGE}
+ARG APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn
+COPY --from=go-builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+RUN if [ -n "$APT_MIRROR" ]; then \
+      sed -i "s|http://deb.debian.org/debian-security|$APT_MIRROR/debian-security|g; s|http://deb.debian.org/debian|$APT_MIRROR/debian|g" /etc/apt/sources.list.d/debian.sources; \
+    fi \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata libasan8 wget \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=go-builder /build/new-api /new-api
+COPY --chmod=755 deploy/entrypoint.sh /entrypoint.sh
+COPY LICENSE NOTICE THIRD-PARTY-LICENSES.md /licenses/
+EXPOSE 3000
+WORKDIR /data
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["/new-api"]

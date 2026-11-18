@@ -52,6 +52,8 @@ const (
 	MsgRelayRequestRejected              = "relay.request_rejected"
 	MsgRelayRequestPluginFailed          = "relay.request_plugin_failed"
 	MsgRelayResponseRejected             = "relay.response_rejected"
+	MsgRelayAutoPoolContextLimit         = "relay.auto_pool_context_limit"
+	MsgRelayAutoPoolPriceRequired        = "relay.auto_pool_price_required"
 )
 
 // Emails and the name of the token created at registration, in the
