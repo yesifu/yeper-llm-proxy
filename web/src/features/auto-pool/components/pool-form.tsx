@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import {
   Controller,
@@ -34,14 +34,27 @@ import { Field, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 
-import { probeAutoPoolMember, saveAutoPool, type AutoPoolData } from '../api'
+import {
+  getAutoPoolChannels,
+  probeAutoPoolMember,
+  saveAutoPool,
+  type AutoPoolData,
+} from '../api'
+import { createPoolMembers } from '../lib/channel-options'
 import { autoPoolSchema, type AutoPoolConfig } from '../lib/schema'
+import { ChannelPicker } from './channel-picker'
 import { MemberEditor } from './member-editor'
 
 export function PoolForm(props: { data: AutoPoolData }) {
   const { t } = useTranslation()
   const client = useQueryClient()
   const [removing, setRemoving] = useState<number | null>(null)
+  const [adding, setAdding] = useState(false)
+  const channels = useQuery({
+    queryKey: ['auto-pool-channels'],
+    queryFn: getAutoPoolChannels,
+    staleTime: 30000,
+  })
   const form = useForm<AutoPoolConfig>({
     resolver: zodResolver(autoPoolSchema),
     defaultValues: props.data.config,
@@ -79,7 +92,7 @@ export function PoolForm(props: { data: AutoPoolData }) {
           </p>
           <p>
             {t(
-              'Add channels and model prices first. Reuse a resource key for the same upstream deployment.'
+              'Choose configured channels and models to add them to the pool.'
             )}
           </p>
           <p>
@@ -164,6 +177,10 @@ export function PoolForm(props: { data: AutoPoolData }) {
             <MemberEditor
               key={member.formKey}
               index={index}
+              channel={channels.data?.find(
+                (channel) => channel.id === member.channel_id
+              )}
+              catalogKnown={channels.isSuccess}
               runtime={props.data.runtime.find((row) => row.id === member.id)}
               probeDisabled={
                 dirty ||
@@ -181,22 +198,9 @@ export function PoolForm(props: { data: AutoPoolData }) {
           <Button
             type='button'
             variant='outline'
-            onClick={() =>
-              members.append({
-                id: `node-${Date.now().toString(36)}`,
-                channel_id: 1,
-                actual_model: '',
-                weight: 100,
-                resource_key: '',
-                max_concurrency: 1,
-                state: 'paused',
-                supports_tools: true,
-                supports_vision: false,
-                context_window: 0,
-              })
-            }
+            onClick={() => setAdding(true)}
           >
-            {t('Add pool member')}
+            {t('Add from channels')}
           </Button>
         </fieldset>
         {save.isError && (
@@ -228,6 +232,30 @@ export function PoolForm(props: { data: AutoPoolData }) {
           )}
         </div>
       </form>
+      {adding && (
+        <ChannelPicker
+          channels={channels.data ?? []}
+          loading={channels.isPending || channels.isFetching}
+          failed={channels.isError}
+          members={form.getValues('members')}
+          onRefresh={() => {
+            void channels.refetch()
+          }}
+          onClose={() => setAdding(false)}
+          onAdd={(channel, selected) => {
+            const current = form.getValues('members')
+            const additions = createPoolMembers(channel, selected, current)
+            if (
+              current.length + additions.length > 256 ||
+              additions.length === 0
+            ) {
+              return
+            }
+            members.append(additions, { shouldFocus: false })
+            setAdding(false)
+          }}
+        />
+      )}
       <ConfirmDialog
         open={removing !== null}
         onOpenChange={(open) => {

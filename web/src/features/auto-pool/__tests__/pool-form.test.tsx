@@ -17,13 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { api } from '@/lib/api'
 
-import { getAutoPool, type AutoPoolData } from '../api'
+import { getAutoPool, type AutoPoolData, type PoolChannel } from '../api'
+import { ChannelPicker } from '../components/channel-picker'
 import { PoolForm } from '../components/pool-form'
 
 const data: AutoPoolData = {
@@ -62,6 +63,24 @@ const data: AutoPoolData = {
   ],
 }
 
+const channel: PoolChannel = {
+  id: 1,
+  name: 'GPU server',
+  type: 1,
+  status: 1,
+  models: [{ name: 'qwen', actual_model: 'qwen' }],
+  compatible: true,
+  incompatibility_reason: '',
+}
+
+beforeEach(() => {
+  vi.spyOn(api, 'get').mockResolvedValue({
+    data: { success: true, data: [channel] },
+  })
+})
+
+afterEach(() => vi.unstubAllGlobals())
+
 function renderForm(value = data) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -74,6 +93,64 @@ function renderForm(value = data) {
 }
 
 describe('Auto pool editor', () => {
+  it('adds a configured single-model channel without typing node or model identifiers', async () => {
+    const user = userEvent.setup()
+    vi.stubGlobal('crypto', {
+      getRandomValues: crypto.getRandomValues.bind(crypto),
+    })
+    vi.spyOn(api, 'get').mockResolvedValue({
+      data: {
+        success: true,
+        data: [
+          {
+            id: 2,
+            name: 'H20 server',
+            type: 1,
+            status: 1,
+            models: [{ name: 'qwen', actual_model: 'qwen' }],
+            compatible: true,
+            incompatibility_reason: '',
+          },
+        ],
+      },
+    })
+    const put = vi
+      .spyOn(api, 'put')
+      .mockResolvedValue({ data: { success: true, data } })
+    renderForm({
+      ...data,
+      config: { ...data.config, members: [] },
+      runtime: [],
+    })
+    await user.click(screen.getByRole('button', { name: 'Add from channels' }))
+    await user.click(await screen.findByRole('combobox', { name: 'Channel' }))
+    await user.type(screen.getByRole('combobox', { name: 'Channel' }), 'H20')
+    await user.click(await screen.findByRole('option', { name: /H20 server/ }))
+    await user.click(
+      screen.getByRole('button', { name: 'Add selected models' })
+    )
+    expect(screen.queryByLabelText('Member ID')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Channel ID')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Actual model')).not.toBeInTheDocument()
+    expect(screen.getByText('H20 server')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith(
+        '/api/auto_pool/',
+        expect.objectContaining({
+          members: [
+            expect.objectContaining({
+              channel_id: 2,
+              actual_model: 'qwen',
+              resource_key: 'channel-2',
+              max_concurrency: 1,
+              state: 'accepting',
+            }),
+          ],
+        })
+      )
+    )
+  })
   it('does not probe paused members or show a known capacity when Redis is unavailable', () => {
     renderForm({
       ...data,
@@ -133,8 +210,11 @@ describe('Auto pool editor', () => {
     )
   })
 
-  it('shows empty pool guidance and adds an editable paused member', async () => {
+  it('shows empty channel guidance without creating a blank pool member', async () => {
     const user = userEvent.setup()
+    vi.spyOn(api, 'get').mockResolvedValue({
+      data: { success: true, data: [] },
+    })
     renderForm({
       ...data,
       config: { ...data.config, members: [] },
@@ -145,9 +225,14 @@ describe('Auto pool editor', () => {
         'No pool members. Add an existing channel to get started.'
       )
     ).toBeVisible()
-    await user.click(screen.getByRole('button', { name: 'Add pool member' }))
-    expect(screen.getByLabelText('Routing state')).toHaveValue('paused')
-    expect(screen.getByRole('button', { name: 'Probe now' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Add from channels' }))
+    expect(
+      await screen.findByText('No channels configured. Add a channel first.')
+    ).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: 'Add selected models' })
+    ).toBeDisabled()
+    expect(screen.queryByLabelText('Actual model')).not.toBeInTheDocument()
   })
 
   it('blocks invalid capacity before calling the server', async () => {
@@ -165,6 +250,240 @@ describe('Auto pool editor', () => {
       'true'
     )
     expect(put).not.toHaveBeenCalled()
+  })
+
+  it('adds only new terminal models in a batch and reuses the saved resource capacity', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(api, 'get').mockResolvedValue({
+      data: {
+        success: true,
+        data: [
+          {
+            ...channel,
+            models: [
+              { name: 'qwen', actual_model: 'qwen' },
+              { name: 'friendly-alias', actual_model: 'model-two' },
+              { name: 'second-alias', actual_model: 'model-two' },
+              { name: 'model-three', actual_model: 'model-three' },
+            ],
+          },
+        ],
+      },
+    })
+    const put = vi
+      .spyOn(api, 'put')
+      .mockResolvedValue({ data: { success: true, data } })
+    renderForm()
+    await user.click(screen.getByRole('button', { name: 'Add from channels' }))
+    await user.click(await screen.findByRole('combobox', { name: 'Channel' }))
+    await user.click(await screen.findByRole('option', { name: 'GPU server' }))
+    expect(
+      screen.getByRole('button', { name: 'Add selected models' })
+    ).toBeDisabled()
+    await user.click(
+      screen.getByRole('button', { name: 'All available models' })
+    )
+    expect(
+      within(screen.getByRole('dialog')).getByText('friendly-alias')
+    ).toBeVisible()
+    expect(
+      within(screen.getByRole('dialog')).queryByText('second-alias')
+    ).not.toBeInTheDocument()
+    await user.click(
+      screen.getByRole('button', { name: 'Add selected models' })
+    )
+    expect(screen.getAllByLabelText('Concurrency limit')).toHaveLength(3)
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(put).toHaveBeenCalled())
+    const saved = put.mock.calls[0][1] as AutoPoolData['config']
+    expect(saved.members[0]).toEqual(data.config.members[0])
+    expect(saved.members.map((member) => member.actual_model)).toEqual([
+      'qwen',
+      'model-two',
+      'model-three',
+    ])
+    expect(saved.members.slice(1)).toEqual([
+      expect.objectContaining({
+        resource_key: 'gpu-a',
+        max_concurrency: 2,
+        state: 'accepting',
+        supports_tools: false,
+        supports_vision: false,
+      }),
+      expect.objectContaining({
+        resource_key: 'gpu-a',
+        max_concurrency: 2,
+        state: 'accepting',
+        supports_tools: false,
+        supports_vision: false,
+      }),
+    ])
+    expect(new Set(saved.members.map((member) => member.id)).size).toBe(3)
+  })
+
+  it('explains incompatible channels before allowing any pool member to be added', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(api, 'get').mockResolvedValue({
+      data: {
+        success: true,
+        data: [
+          {
+            ...channel,
+            compatible: false,
+            incompatibility_reason: 'custom_route',
+          },
+        ],
+      },
+    })
+    renderForm()
+    await user.click(screen.getByRole('button', { name: 'Add from channels' }))
+    await user.click(await screen.findByRole('combobox', { name: 'Channel' }))
+    await user.click(await screen.findByRole('option', { name: /GPU server/ }))
+    expect(
+      within(screen.getByRole('dialog')).getByRole('status')
+    ).toHaveTextContent('Custom routes are not supported by the auto pool.')
+    expect(
+      screen.getByRole('button', { name: 'Add selected models' })
+    ).toBeDisabled()
+    expect(
+      screen.queryByRole('combobox', { name: 'Select models' })
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows already pooled feedback instead of creating duplicate members', async () => {
+    const user = userEvent.setup()
+    renderForm()
+    await user.click(screen.getByRole('button', { name: 'Add from channels' }))
+    await user.click(await screen.findByRole('combobox', { name: 'Channel' }))
+    await user.click(await screen.findByRole('option', { name: /GPU server/ }))
+    expect(
+      await screen.findByText(
+        'All models from this channel are already in the pool.'
+      )
+    ).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: 'Add selected models' })
+    ).toBeDisabled()
+  })
+
+  it('keeps existing member edits when the channel catalog fails and allows retry', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(api, 'get').mockRejectedValue(new Error('Catalog offline'))
+    renderForm()
+    await user.clear(screen.getByLabelText('Weight'))
+    await user.type(screen.getByLabelText('Weight'), '250')
+    await user.click(screen.getByRole('button', { name: 'Add from channels' }))
+    expect(await screen.findByText('Could not load channels.')).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: 'Add selected models' })
+    ).toBeDisabled()
+    vi.spyOn(api, 'get').mockResolvedValue({
+      data: { success: true, data: [] },
+    })
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(
+      await screen.findByText('No channels configured. Add a channel first.')
+    ).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.getByLabelText('Weight')).toHaveValue(250)
+    expect(screen.getByText('qwen')).toBeVisible()
+    expect(screen.getByText('Channel unavailable')).toBeVisible()
+  })
+
+  it('prevents adding while catalog loads and restores focus when cancelled by keyboard', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(api, 'get').mockReturnValue(new Promise(() => {}))
+    renderForm()
+    const add = screen.getByRole('button', { name: 'Add from channels' })
+    await user.click(add)
+    expect(await screen.findByText('Loading...')).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: 'Add selected models' })
+    ).toBeDisabled()
+    await user.keyboard('{Escape}')
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    )
+    await waitFor(() => expect(add).toHaveFocus())
+    expect(screen.getByText('qwen')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
+  })
+
+  it('updates the concurrency limit for all members sharing a resource', async () => {
+    const user = userEvent.setup()
+    const put = vi
+      .spyOn(api, 'put')
+      .mockResolvedValue({ data: { success: true, data } })
+    renderForm({
+      ...data,
+      config: {
+        ...data.config,
+        members: [
+          data.config.members[0],
+          {
+            ...data.config.members[0],
+            id: 'other-model',
+            actual_model: 'model-two',
+          },
+        ],
+      },
+    })
+    const limits = screen.getAllByLabelText('Concurrency limit')
+    await user.clear(limits[0])
+    await user.type(limits[0], '4')
+    expect(limits[1]).toHaveValue(4)
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith(
+        '/api/auto_pool/',
+        expect.objectContaining({
+          members: [
+            expect.objectContaining({ id: 'gpu-a', max_concurrency: 4 }),
+            expect.objectContaining({ id: 'other-model', max_concurrency: 4 }),
+          ],
+        })
+      )
+    )
+  })
+
+  it('blocks a batch that would exceed the 256-member pool limit', async () => {
+    const user = userEvent.setup()
+    const onAdd = vi.fn()
+    render(
+      <ChannelPicker
+        channels={[
+          {
+            ...channel,
+            id: 2,
+            models: [
+              { name: 'one', actual_model: 'one' },
+              { name: 'two', actual_model: 'two' },
+            ],
+          },
+        ]}
+        members={Array.from({ length: 255 }, (_, index) => ({
+          ...data.config.members[0],
+          id: `existing-${index}`,
+        }))}
+        loading={false}
+        failed={false}
+        onRefresh={vi.fn()}
+        onClose={vi.fn()}
+        onAdd={onAdd}
+      />
+    )
+    await user.click(screen.getByRole('combobox', { name: 'Channel' }))
+    await user.click(await screen.findByRole('option', { name: 'GPU server' }))
+    await user.click(
+      screen.getByRole('button', { name: 'All available models' })
+    )
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'The auto pool supports at most 256 members.'
+    )
+    expect(
+      screen.getByRole('button', { name: 'Add selected models' })
+    ).toBeDisabled()
+    expect(onAdd).not.toHaveBeenCalled()
   })
 
   it('treats a failed GET response as an error rather than empty configuration', async () => {

@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQuery } from '@tanstack/react-query'
+import { usePrefetchQuery, useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
@@ -25,11 +25,16 @@ import { SectionPageLayout } from '@/components/layout'
 import { LoadingState } from '@/components/loading-state'
 import { Button } from '@/components/ui/button'
 
-import { getAutoPool } from './api'
+import { getAutoPool, getAutoPoolChannels } from './api'
 import { PoolForm } from './components/pool-form'
 
 export function AutoPool() {
   const { t } = useTranslation()
+  usePrefetchQuery({
+    queryKey: ['auto-pool-channels'],
+    queryFn: getAutoPoolChannels,
+    staleTime: 30000,
+  })
   const query = useQuery({
     queryKey: ['auto-pool'],
     queryFn: getAutoPool,

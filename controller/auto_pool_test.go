@@ -19,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -181,7 +182,7 @@ func TestAutoPoolPersistenceDatabaseMatrix(t *testing.T) {
 
 func TestAutoPoolManagementAuthorization(t *testing.T) {
 	admin, _ := setupAccessTokenAudit(t)
-	require.NoError(t, model.DB.AutoMigrate(&model.SystemTask{}))
+	require.NoError(t, model.DB.AutoMigrate(&model.SystemTask{}, &model.Channel{}))
 	previousOptions := common.OptionMap
 	previousMemory := common.MemoryCacheEnabled
 	common.OptionMap = map[string]string{}
@@ -204,6 +205,7 @@ func TestAutoPoolManagementAuthorization(t *testing.T) {
 		handler      gin.HandlerFunc
 	}{
 		{http.MethodGet, "/api/auto_pool/", authz.ChannelRead, GetAutoPool},
+		{http.MethodGet, "/api/auto_pool/channels", authz.ChannelRead, GetAutoPoolChannels},
 		{http.MethodPut, "/api/auto_pool/", authz.ChannelWrite, UpdateAutoPool},
 		{http.MethodPost, "/api/auto_pool/probe/:id", authz.ChannelOperate, ProbeAutoPoolMember},
 	} {
@@ -228,12 +230,19 @@ func TestAutoPoolManagementAuthorization(t *testing.T) {
 		name, token string
 		status      int
 	}{{"anonymous", "", http.StatusUnauthorized}, {"invalid", "not-a-valid-token", http.StatusUnauthorized}, {"ordinary user", regularSession, http.StatusForbidden}} {
-		for _, route := range []struct{ method, path string }{{http.MethodGet, "/api/auto_pool/"}, {http.MethodPut, "/api/auto_pool/"}, {http.MethodPost, "/api/auto_pool/probe/missing"}} {
+		for _, route := range []struct{ method, path string }{{http.MethodGet, "/api/auto_pool/"}, {http.MethodGet, "/api/auto_pool/channels"}, {http.MethodPut, "/api/auto_pool/"}, {http.MethodPost, "/api/auto_pool/probe/missing"}} {
 			response := request(route.method, route.path, tc.token)
 			assert.Equal(t, tc.status, response.Code, tc.name+" "+route.method+": "+response.Body.String())
 		}
 	}
 	assert.Equal(t, http.StatusOK, request(http.MethodGet, "/api/auto_pool/", readToken).Code)
+	catalog := request(http.MethodGet, "/api/auto_pool/channels", readToken)
+	assert.Equal(t, http.StatusOK, catalog.Code)
+	assert.Contains(t, catalog.Body.String(), `"success":true`)
+	assert.Equal(t, http.StatusOK, request(http.MethodGet, "/api/auto_pool/channels", adminSession).Code)
+	for _, token := range []string{writeToken, operateToken} {
+		assert.Equal(t, http.StatusForbidden, request(http.MethodGet, "/api/auto_pool/channels", token).Code)
+	}
 	assert.Equal(t, http.StatusForbidden, request(http.MethodPut, "/api/auto_pool/", readToken).Code)
 	assert.Equal(t, http.StatusForbidden, request(http.MethodPost, "/api/auto_pool/probe/missing", readToken).Code)
 	response := request(http.MethodPut, "/api/auto_pool/", writeToken)
@@ -249,5 +258,103 @@ func TestAutoPoolManagementAuthorization(t *testing.T) {
 	for _, token := range []string{writeToken, operateToken, adminSession} {
 		assert.Equal(t, http.StatusForbidden, request(http.MethodPut, "/api/auto_pool/", token).Code)
 		assert.Equal(t, http.StatusForbidden, request(http.MethodPost, "/api/auto_pool/probe/missing", token).Code)
+	}
+	require.NoError(t, authz.SetUserPermissions(admin.Id, authz.PermissionsMap{authz.ResourceChannel: {authz.ActionRead: false, authz.ActionWrite: true, authz.ActionOperate: true}}))
+	for _, token := range []string{readToken, adminSession} {
+		assert.Equal(t, http.StatusForbidden, request(http.MethodGet, "/api/auto_pool/channels", token).Code)
+	}
+}
+
+func TestAutoPoolChannelCatalogDatabaseMatrix(t *testing.T) {
+	previousPassthrough := model_setting.GetGlobalSettings().PassThroughRequestEnabled
+	model_setting.GetGlobalSettings().PassThroughRequestEnabled = false
+	t.Cleanup(func() { model_setting.GetGlobalSettings().PassThroughRequestEnabled = previousPassthrough })
+	for _, dialect := range []struct{ kind, env string }{{"sqlite", ""}, {"mysql", "TEST_MYSQL_DSN"}, {"postgres", "TEST_POSTGRES_DSN"}} {
+		t.Run(dialect.kind, func(t *testing.T) {
+			if dialect.env != "" && os.Getenv(dialect.env) == "" {
+				t.Skip("set " + dialect.env + " to run this database")
+			}
+			db := modelManagementDB(t, dialect.kind, os.Getenv(dialect.env))
+			var response struct {
+				Success bool                    `json:"success"`
+				Data    []autoPoolChannelOption `json:"data"`
+			}
+			modelManagementRequest(t, GetAutoPoolChannels, http.MethodGet, "/api/auto_pool/channels", nil, &response)
+			require.True(t, response.Success)
+			assert.Equal(t, []autoPoolChannelOption{}, response.Data, "empty catalog is an array")
+			fixtures := []struct {
+				name, models, mapping, setting, parameters, other, reason string
+				channelType, status                                       int
+				wantModels                                                []autoPoolChannelModel
+			}{
+				{name: "configured aliases", models: "alias,alias, llm-auto, stable,second", mapping: `{"alias":"middle","middle":"actual","actual":"actual","stable":"stable","second":"actual"}`, wantModels: []autoPoolChannelModel{{"alias", "actual"}, {"stable", "stable"}, {"second", "actual"}}},
+				{name: "disabled", models: "actual", status: common.ChannelStatusManuallyDisabled, reason: "disabled"},
+				{name: "body passthrough", models: "actual", setting: `{"pass_through_body_enabled":true}`, reason: "passthrough"},
+				{name: "parameter override", models: "actual", parameters: `{"model":"private-override-value"}`, reason: "parameter_override"},
+				{name: "custom route", models: "actual", channelType: constant.ChannelTypeAdvancedCustom, other: `{"advanced_custom":{"advanced_routes":[{"incoming_path":"/v1/chat/completions","upstream_path":"https://private-route.example?secret=private-route-key"}]}}`, reason: "custom_route"},
+				{name: "vLLM preset", models: "actual", channelType: constant.ChannelTypeVLLM, wantModels: []autoPoolChannelModel{{"actual", "actual"}}},
+				{name: "SGLang preset", models: "actual", channelType: constant.ChannelTypeSGLang, wantModels: []autoPoolChannelModel{{"actual", "actual"}}},
+				{name: "mapping cycle", models: "alias", mapping: `{"alias":"second","second":"alias"}`, reason: "invalid_model_mapping"},
+				{name: "malformed mapping", models: "actual", mapping: `{"actual":{"secret":"private-mapping-value"}}`, reason: "invalid_model_mapping"},
+				{name: "invalid mapped model", models: "alias", mapping: `{"alias":"  actual"}`, reason: "invalid_model_mapping"},
+				{name: "no models", models: "", reason: "no_models"},
+				{name: "recursive auto model", models: "llm-auto,alias", mapping: `{"alias":"llm-auto"}`, reason: "no_models"},
+				{name: "malformed settings", models: "actual", setting: `invalid-private-settings`, reason: "invalid_channel_settings"},
+				{name: "malformed other settings", models: "actual", other: `invalid-private-other-settings`, reason: "invalid_channel_settings"},
+				{name: "malformed parameter override", models: "actual", parameters: `["private-parameter-value"]`, reason: "invalid_channel_settings"},
+			}
+			channels := make([]model.Channel, 0, len(fixtures))
+			for _, fixture := range fixtures {
+				channel := model.Channel{
+					Name: fixture.name, Models: fixture.models, Type: fixture.channelType, Status: fixture.status,
+					Key: "private-channel-key", BaseURL: common.GetPointer("https://private-base.example?token=private-url-token"),
+					Setting: common.GetPointer(fixture.setting), ParamOverride: common.GetPointer(fixture.parameters),
+					OtherSettings: fixture.other, ModelMapping: common.GetPointer(fixture.mapping),
+					HeaderOverride: common.GetPointer(`{"Authorization":"private-header-value"}`),
+				}
+				if channel.Type == 0 {
+					channel.Type = constant.ChannelTypeOpenAI
+				}
+				if channel.Status == 0 {
+					channel.Status = common.ChannelStatusEnabled
+				}
+				require.NoError(t, db.Create(&channel).Error)
+				channels = append(channels, channel)
+			}
+			recorder := modelManagementRequest(t, GetAutoPoolChannels, http.MethodGet, "/api/auto_pool/channels", nil, &response)
+			require.True(t, response.Success, recorder.Body.String())
+			require.Len(t, response.Data, len(fixtures))
+			assert.NotContains(t, recorder.Body.String(), "private-", "no upstream credentials, addresses or raw settings escape into the catalog")
+			for index, fixture := range fixtures {
+				option := response.Data[index]
+				assert.Equal(t, channels[index].Id, option.ID, "stable channel order")
+				assert.Equal(t, fixture.name, option.Name)
+				assert.Equal(t, channels[index].Type, option.Type)
+				assert.Equal(t, channels[index].Status, option.Status)
+				assert.Equal(t, fixture.reason, option.IncompatibilityReason, fixture.name)
+				assert.Equal(t, fixture.reason == "", option.Compatible, fixture.name)
+				if fixture.wantModels != nil {
+					assert.Equal(t, fixture.wantModels, option.Models, fixture.name)
+				} else if fixture.reason == "invalid_model_mapping" || fixture.reason == "no_models" {
+					assert.Empty(t, option.Models, fixture.name)
+				}
+				var stored model.Channel
+				require.NoError(t, db.First(&stored, channels[index].Id).Error)
+				assert.Equal(t, channels[index], stored, "catalog must not mutate channel settings")
+			}
+			// Global request passthrough makes every otherwise eligible channel
+			// unavailable, consistently with the pool routing compatibility gate.
+			model_setting.GetGlobalSettings().PassThroughRequestEnabled = true
+			modelManagementRequest(t, GetAutoPoolChannels, http.MethodGet, "/api/auto_pool/channels", nil, &response)
+			model_setting.GetGlobalSettings().PassThroughRequestEnabled = false
+			require.True(t, response.Success)
+			assert.False(t, response.Data[0].Compatible)
+			assert.Equal(t, "passthrough", response.Data[0].IncompatibilityReason)
+
+			// A failed metadata query must not masquerade as an empty selection.
+			require.NoError(t, db.Migrator().DropTable(&model.Channel{}))
+			modelManagementRequest(t, GetAutoPoolChannels, http.MethodGet, "/api/auto_pool/channels", nil, &response)
+			assert.False(t, response.Success)
+		})
 	}
 }

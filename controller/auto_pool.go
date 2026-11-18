@@ -4,14 +4,123 @@ import (
 	"context"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
 )
+
+type autoPoolChannelModel struct {
+	Name        string `json:"name"`
+	ActualModel string `json:"actual_model"`
+}
+
+type autoPoolChannelOption struct {
+	ID                    int                    `json:"id"`
+	Name                  string                 `json:"name"`
+	Type                  int                    `json:"type"`
+	Status                int                    `json:"status"`
+	Models                []autoPoolChannelModel `json:"models"`
+	Compatible            bool                   `json:"compatible"`
+	IncompatibilityReason string                 `json:"incompatibility_reason"`
+}
+
+func GetAutoPoolChannels(c *gin.Context) {
+	var channels []model.Channel
+	// Fetch only selection metadata. Credentials and upstream URLs are not
+	// needed for the picker and must never be serialized into its response.
+	err := model.DB.WithContext(c.Request.Context()).Select("id", "name", "type", "status", "models", "model_mapping", "setting", "param_override", "settings").Order("id ASC").Find(&channels).Error
+	if err != nil {
+		common.ApiErrorT(c, "Auto pool operation failed")
+		return
+	}
+	options := make([]autoPoolChannelOption, 0, len(channels))
+	for _, channel := range channels {
+		option := autoPoolChannelOption{
+			ID: channel.Id, Name: channel.Name, Type: channel.Type, Status: channel.Status,
+			Models: []autoPoolChannelModel{}, IncompatibilityReason: autoPoolChannelUnavailableReason(&channel),
+		}
+		mappingContext := &gin.Context{}
+		mappingContext.Set("model_mapping", channel.GetModelMapping())
+		seen := map[string]bool{}
+		for _, name := range channel.GetModels() {
+			name = strings.TrimSpace(name)
+			if name == "" || name == service.AutoPoolModel || seen[name] {
+				continue
+			}
+			seen[name] = true
+			info := &relaycommon.RelayInfo{OriginModelName: name, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: name}}
+			if err := helper.ModelMappedHelper(mappingContext, info, nil); err != nil {
+				option.IncompatibilityReason = "invalid_model_mapping"
+				option.Models = []autoPoolChannelModel{}
+				break
+			}
+			actual := info.UpstreamModelName
+			if actual == service.AutoPoolModel {
+				continue
+			}
+			if actual == "" || actual != strings.TrimSpace(actual) || len(actual) > 256 || strings.ContainsAny(actual, "\r\n\t") {
+				option.IncompatibilityReason = "invalid_model_mapping"
+				option.Models = []autoPoolChannelModel{}
+				break
+			}
+			option.Models = append(option.Models, autoPoolChannelModel{Name: name, ActualModel: actual})
+		}
+		if option.IncompatibilityReason == "" && len(option.Models) == 0 {
+			option.IncompatibilityReason = "no_models"
+		}
+		option.Compatible = option.IncompatibilityReason == ""
+		options = append(options, option)
+	}
+	common.ApiSuccess(c, options)
+}
+
+// Match the pool's compatibility checks without the channel settings getters:
+// those getters repair malformed stored JSON, whereas this endpoint is read-only.
+func autoPoolChannelUnavailableReason(channel *model.Channel) string {
+	if channel.Status != common.ChannelStatusEnabled {
+		return "disabled"
+	}
+	settings := dto.ChannelSettings{}
+	if channel.Setting != nil && *channel.Setting != "" {
+		if err := common.UnmarshalJsonStr(*channel.Setting, &settings); err != nil {
+			return "invalid_channel_settings"
+		}
+	}
+	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || settings.PassThroughBodyEnabled {
+		return "passthrough"
+	}
+	parameters := map[string]any{}
+	if channel.ParamOverride != nil && *channel.ParamOverride != "" {
+		if err := common.UnmarshalJsonStr(*channel.ParamOverride, &parameters); err != nil {
+			return "invalid_channel_settings"
+		}
+	}
+	if len(parameters) > 0 {
+		return "parameter_override"
+	}
+	if common.GetAdvancedCustomPreset(channel.Type) != nil {
+		return ""
+	}
+	other := dto.ChannelOtherSettings{}
+	if channel.OtherSettings != "" {
+		if err := common.UnmarshalJsonStr(channel.OtherSettings, &other); err != nil {
+			return "invalid_channel_settings"
+		}
+	}
+	if other.AdvancedCustom != nil && len(other.AdvancedCustom.Routes) > 0 {
+		return "custom_route"
+	}
+	return ""
+}
 
 func GetAutoPool(c *gin.Context) {
 	config, err := service.GetAutoPoolConfig()

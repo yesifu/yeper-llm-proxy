@@ -31,7 +31,23 @@ export type MemberRuntime = {
   safe_to_reclaim: boolean
 }
 export type AutoPoolData = { config: AutoPoolConfig; runtime: MemberRuntime[] }
+export type PoolChannel = {
+  id: number
+  name: string
+  type: number
+  status: number
+  models: { name: string; actual_model: string }[]
+  compatible: boolean
+  incompatibility_reason: string
+}
 type Response<T> = { success: boolean; message?: string; data: T }
+
+export async function getAutoPoolChannels(): Promise<PoolChannel[]> {
+  const response = await api.get<Response<PoolChannel[]>>(
+    '/api/auto_pool/channels'
+  )
+  return requireServerSuccess(response.data).data
+}
 
 export async function getAutoPool(): Promise<AutoPoolData> {
   const response = await api.get<Response<AutoPoolData>>('/api/auto_pool/')

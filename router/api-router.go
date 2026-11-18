@@ -290,6 +290,7 @@ func SetApiRouter(router *gin.Engine) {
 		registerChannelRoutes(apiRouter)
 		autoPoolRoute := apiRouter.Group("/auto_pool", middleware.AdminAuth(), middleware.DisableCache())
 		handlePermissionRoute(autoPoolRoute, http.MethodGet, "/", authz.ChannelRead, controller.GetAutoPool)
+		handlePermissionRoute(autoPoolRoute, http.MethodGet, "/channels", authz.ChannelRead, controller.GetAutoPoolChannels)
 		handlePermissionRoute(autoPoolRoute, http.MethodPut, "/", authz.ChannelWrite, controller.UpdateAutoPool)
 		handlePermissionRoute(autoPoolRoute, http.MethodPost, "/probe/:id", authz.ChannelOperate, controller.ProbeAutoPoolMember)
 		registerAuthzRoutes(apiRouter)

@@ -16,11 +16,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Controller, useFormContext } from 'react-hook-form'
+import { Controller, useFormContext, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import { Field, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
@@ -28,11 +33,14 @@ import { Switch } from '@/components/ui/switch'
 import { toIntlLocale } from '@/i18n/languages'
 import { formatNumber } from '@/lib/format'
 
-import type { MemberRuntime } from '../api'
+import type { MemberRuntime, PoolChannel } from '../api'
+import { channelUnavailableMessage } from '../lib/channel-options'
 import type { AutoPoolConfig } from '../lib/schema'
 
 type Props = {
   index: number
+  channel?: PoolChannel
+  catalogKnown: boolean
   runtime?: MemberRuntime
   probeDisabled: boolean
   onProbe: () => void
@@ -50,25 +58,27 @@ export function MemberEditor(props: Props) {
     unhealthy: t('Unhealthy'),
     stale: t('Health check expired'),
   }
+  const member = useWatch({ control: form.control, name: base })
   const fields = [
-    { name: 'id', label: t('Member ID'), type: 'text' },
-    { name: 'channel_id', label: t('Channel ID'), type: 'number' },
-    { name: 'actual_model', label: t('Actual model'), type: 'text' },
     { name: 'weight', label: t('Weight'), type: 'number' },
-    { name: 'resource_key', label: t('Shared resource key'), type: 'text' },
     { name: 'max_concurrency', label: t('Concurrency limit'), type: 'number' },
-    {
-      name: 'context_window',
-      label: t('Context limit (0 = unlimited)'),
-      type: 'number',
-    },
   ] as const
 
   return (
     <fieldset className='min-w-0 space-y-4 rounded-lg border p-4'>
-      <legend className='px-2 font-medium'>
-        {t('Pool member')} {formatNumber(props.index + 1, locale)}
+      <legend className='max-w-full px-2 font-medium break-all'>
+        {props.channel?.name ??
+          t('Channel {{id}}', { id: formatNumber(member.channel_id, locale) })}
       </legend>
+      <p className='font-mono text-sm break-all'>{member.actual_model}</p>
+      {props.catalogKnown && !props.channel && (
+        <p className='text-destructive text-sm'>{t('Channel unavailable')}</p>
+      )}
+      {props.channel && !props.channel.compatible && (
+        <p className='text-destructive text-sm'>
+          {channelUnavailableMessage(props.channel, t)}
+        </p>
+      )}
       <div className='flex flex-wrap items-center gap-2' aria-live='polite'>
         <Badge
           variant={
@@ -118,7 +128,7 @@ export function MemberEditor(props: Props) {
           {t(props.runtime.last_error)}
         </p>
       )}
-      <div className='grid gap-4 sm:grid-cols-2 xl:grid-cols-4'>
+      <div className='grid gap-4 sm:grid-cols-3'>
         {fields.map((field) => {
           const name = `${base}.${field.name}` as const
           const error = form.getFieldState(name, form.formState).error
@@ -130,7 +140,23 @@ export function MemberEditor(props: Props) {
                 type={field.type}
                 aria-invalid={Boolean(error)}
                 {...form.register(name, {
-                  valueAsNumber: field.type === 'number',
+                  valueAsNumber: true,
+                  onChange: (event) => {
+                    if (field.name !== 'max_concurrency') return
+                    const value = event.target.valueAsNumber
+                    form.getValues('members').forEach((item, index) => {
+                      if (
+                        index !== props.index &&
+                        item.resource_key === member.resource_key
+                      ) {
+                        form.setValue(
+                          `members.${index}.max_concurrency`,
+                          value,
+                          { shouldDirty: true, shouldValidate: true }
+                        )
+                      }
+                    })
+                  },
                 })}
               />
               {error && (
@@ -182,6 +208,93 @@ export function MemberEditor(props: Props) {
           />
         ))}
       </div>
+      <p className='text-muted-foreground text-xs'>
+        {t(
+          'Capabilities are declared manually. Enable only those supported by this model.'
+        )}{' '}
+        {t('Tool requests only use members with Tool calling enabled.')}
+      </p>
+      <Collapsible>
+        <CollapsibleTrigger
+          render={<Button type='button' variant='ghost' size='sm' />}
+        >
+          {t('Advanced settings')}
+        </CollapsibleTrigger>
+        <CollapsibleContent className='space-y-3 pt-3'>
+          <div className='grid gap-4 sm:grid-cols-2'>
+            <Field
+              data-invalid={Boolean(
+                form.getFieldState(`${base}.resource_key`, form.formState).error
+              )}
+            >
+              <FieldLabel htmlFor={`${base}.resource_key`}>
+                {t('Shared resource key')}
+              </FieldLabel>
+              <Input
+                id={`${base}.resource_key`}
+                aria-invalid={Boolean(
+                  form.getFieldState(`${base}.resource_key`, form.formState)
+                    .error
+                )}
+                {...form.register(`${base}.resource_key`, {
+                  onChange: (event) => {
+                    const shared = form
+                      .getValues('members')
+                      .find(
+                        (item, index) =>
+                          index !== props.index &&
+                          item.resource_key === event.target.value
+                      )
+                    if (shared) {
+                      form.setValue(
+                        `${base}.max_concurrency`,
+                        shared.max_concurrency,
+                        { shouldDirty: true, shouldValidate: true }
+                      )
+                    }
+                  },
+                })}
+              />
+              {form.getFieldState(`${base}.resource_key`, form.formState)
+                .error && (
+                <p role='alert' className='text-destructive text-xs'>
+                  {t('Check this value')}
+                </p>
+              )}
+            </Field>
+            <Field
+              data-invalid={Boolean(
+                form.getFieldState(`${base}.context_window`, form.formState)
+                  .error
+              )}
+            >
+              <FieldLabel htmlFor={`${base}.context_window`}>
+                {t('Context limit (0 = unlimited)')}
+              </FieldLabel>
+              <Input
+                id={`${base}.context_window`}
+                type='number'
+                aria-invalid={Boolean(
+                  form.getFieldState(`${base}.context_window`, form.formState)
+                    .error
+                )}
+                {...form.register(`${base}.context_window`, {
+                  valueAsNumber: true,
+                })}
+              />
+              {form.getFieldState(`${base}.context_window`, form.formState)
+                .error && (
+                <p role='alert' className='text-destructive text-xs'>
+                  {t('Check this value')}
+                </p>
+              )}
+            </Field>
+          </div>
+          <p className='text-muted-foreground text-xs'>
+            {t('Sharing a resource also shares its concurrency limit.')}
+          </p>
+        </CollapsibleContent>
+      </Collapsible>
     </fieldset>
   )
 }
