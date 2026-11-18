@@ -4358,6 +4358,7 @@
     "No plugins available for binding": "暂无可绑定的插件",
     "No plugins of this kind": "暂无此类插件",
     "No pool members. Add an existing channel to get started.": "暂无节点，请添加已有渠道。",
+    "No pool-compatible Chat or Responses route matches the configured models. Check route matching and request passthrough settings.": "此渠道的已配置模型没有可用于自动池的 Chat 或 Responses 路由，请检查路由匹配和请求体透传设置。",
     "No preceding rule matched": "前面的规则均未命中",
     "No preference": "无偏好",
     "No prefill groups yet": "暂无预填充分组",

@@ -4358,6 +4358,7 @@
     "No plugins available for binding": "紐付け可能なプラグインがありません",
     "No plugins of this kind": "この種類のプラグインはありません",
     "No pool members. Add an existing channel to get started.": "メンバーがありません。既存のチャネルを追加してください。",
+    "No pool-compatible Chat or Responses route matches the configured models. Check route matching and request passthrough settings.": "設定済みモデルに一致する、プールで利用可能な Chat または Responses ルートがありません。ルートの一致条件とリクエストのパススルー設定を確認してください。",
     "No preceding rule matched": "先行するルールに一致しない場合",
     "No preference": "設定なし",
     "No prefill groups yet": "まだ事前入力グループはありません",

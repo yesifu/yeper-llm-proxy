@@ -116,6 +116,12 @@ func SelectAutoPoolChannel(c *gin.Context, alias string, group string) (*model.C
 		groups = GetRequestAutoGroups(c, common.GetContextKeyString(c, constant.ContextKeyUserGroup))
 	}
 	constraints := GetChannelConstraints(c)
+	filters := slices.Clone(constraints.Filters)
+	for i := range filters {
+		if filters[i].RequestPath == "/pg/chat/completions" {
+			filters[i].RequestPath = "/v1/chat/completions"
+		}
+	}
 	pin, pinned, _ := constraints.ResolvedPin()
 	attempted := c.GetStringSlice(autoPoolAttemptsKey)
 	candidates := make([]autoPoolCandidate, 0, len(config.Members))
@@ -141,10 +147,14 @@ func SelectAutoPoolChannel(c *gin.Context, alias string, group string) (*model.C
 			}
 		}
 		channel, err := model.CacheGetChannel(member.ChannelID)
-		if err != nil || channel == nil || channel.Status != common.ChannelStatusEnabled || !AutoPoolChannelCompatible(channel) {
+		if err != nil || channel == nil || channel.Status != common.ChannelStatusEnabled {
 			continue
 		}
-		if matches, _ := model.ChannelSatisfiesFilters(channel, member.ActualModel, constraints.Filters); !matches {
+		channel, err = PrepareAutoPoolChannel(channel, member, c.Request.URL.Path)
+		if err != nil {
+			continue
+		}
+		if matches, _ := model.ChannelSatisfiesFilters(channel, member.SourceModel(), filters); !matches {
 			continue
 		}
 		selectedGroup := ""

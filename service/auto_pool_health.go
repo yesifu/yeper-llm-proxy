@@ -25,7 +25,7 @@ type AutoPoolRuntime struct {
 func autoPoolHealthKey(member AutoPoolMember) string {
 	// A changed model or channel must pass a new probe, never inherit health
 	// from the previous member configuration. Redis stores no upstream secrets.
-	digest := sha256.Sum256([]byte(fmt.Sprintf("%s/%d/%s/%s", member.ID, member.ChannelID, member.ActualModel, member.ResourceKey)))
+	digest := sha256.Sum256([]byte(fmt.Sprintf("%s/%d/%q/%q/%s", member.ID, member.ChannelID, member.SourceModel(), member.ActualModel, member.ResourceKey)))
 	return fmt.Sprintf("auto_pool:health:%x", digest)
 }
 

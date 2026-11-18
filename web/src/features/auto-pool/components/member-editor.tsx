@@ -70,7 +70,11 @@ export function MemberEditor(props: Props) {
         {props.channel?.name ??
           t('Channel {{id}}', { id: formatNumber(member.channel_id, locale) })}
       </legend>
-      <p className='font-mono text-sm break-all'>{member.actual_model}</p>
+      <p className='font-mono text-sm break-all'>
+        {member.channel_model && member.channel_model !== member.actual_model
+          ? `${member.channel_model} → ${member.actual_model}`
+          : member.actual_model}
+      </p>
       {props.catalogKnown && !props.channel && (
         <p className='text-destructive text-sm'>{t('Channel unavailable')}</p>
       )}

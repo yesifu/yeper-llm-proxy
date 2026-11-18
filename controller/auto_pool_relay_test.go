@@ -19,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/config"
@@ -101,6 +102,8 @@ func newAutoPoolRelayFixture(t *testing.T, handler http.HandlerFunc) *autoPoolRe
 	f.engine = gin.New()
 	f.engine.Use(middleware.RequestId(), middleware.TokenAuth())
 	f.engine.POST("/v1/chat/completions", middleware.Distribute(), func(c *gin.Context) { Relay(c, types.RelayFormatOpenAI) })
+	f.engine.POST("/v1/responses", middleware.Distribute(), func(c *gin.Context) { Relay(c, types.RelayFormatOpenAIResponses) })
+	f.engine.POST("/pg/chat/completions", middleware.Distribute(), func(c *gin.Context) { c.Set("id", f.user.Id); Playground(c) })
 	f.engine.GET("/v1/models", func(c *gin.Context) { ListModels(c, constant.ChannelTypeOpenAI) })
 	return f
 }
@@ -182,89 +185,290 @@ func TestAutoPoolRelayRetryChargesSelectedModelOnce(t *testing.T) {
 }
 
 func TestAutoPoolRelayStreamingHoldsCapacityAndDrains(t *testing.T) {
-	release := make(chan struct{})
-	var closeOnce sync.Once
-	t.Cleanup(func() { closeOnce.Do(func() { close(release) }) })
-	f := newAutoPoolRelayFixture(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(w, "data: {\"id\":\"stream-test\",\"object\":\"chat.completion.chunk\",\"model\":\"pool-model-a\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"call_test\",\"type\":\"function\",\"function\":{\"name\":\"ping\",\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\n")
-		_, _ = io.WriteString(w, "data: {\"id\":\"stream-test\",\"object\":\"chat.completion.chunk\",\"model\":\"pool-model-a\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":null}]}\n\n")
-		w.(http.Flusher).Flush()
-		select {
-		case <-release:
-		case <-r.Context().Done():
-			return
-		}
-		_, _ = io.WriteString(w, "data: {\"id\":\"stream-test\",\"object\":\"chat.completion.chunk\",\"model\":\"pool-model-a\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\n\ndata: [DONE]\n\n")
-	})
-	gateway := httptest.NewServer(f.engine)
-	t.Cleanup(gateway.Close)
-	r, err := http.NewRequest(http.MethodPost, gateway.URL+"/v1/chat/completions", strings.NewReader(`{"model":"llm-auto","stream":true,"messages":[{"role":"user","content":"call ping"}],"tools":[{"type":"function","function":{"name":"ping","parameters":{"type":"object","properties":{}}}}]}`))
-	require.NoError(t, err)
-	r.Header.Set("Authorization", "Bearer sk-"+f.token.Key)
-	r.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 10 * time.Second}
-	response, err := client.Do(r)
-	require.NoError(t, err)
-	defer response.Body.Close()
-	require.Equal(t, http.StatusOK, response.StatusCode)
-	reader := bufio.NewReader(response.Body)
-	first, err := reader.ReadString('\n')
-	require.NoError(t, err)
-	assert.Contains(t, first, "tool_calls")
-	count, err := service.AutoPoolResourceInFlight(f.pool.Members[0].ResourceKey)
-	require.NoError(t, err)
-	assert.Equal(t, 1, count)
-	busy := f.request(t, "/v1/chat/completions", `{"model":"llm-auto","messages":[{"role":"user","content":"another"}]}`)
-	assert.Equal(t, http.StatusServiceUnavailable, busy.Code)
-	for i := range f.pool.Members {
-		f.pool.Members[i].State = "draining"
-	}
-	require.NoError(t, service.SaveAutoPoolConfig(f.pool))
-	assert.False(t, service.AutoPoolRuntimeSnapshot(f.pool)[0].SafeToReclaim)
-	closeOnce.Do(func() { close(release) })
-	tail, err := io.ReadAll(reader)
-	require.NoError(t, err)
-	assert.Contains(t, string(tail), "[DONE]")
-	// The request middleware releases after the handler's settlement, so
-	// synchronize through the observed lease count, not an arbitrary sleep.
-	require.Eventually(t, func() bool {
-		n, e := service.AutoPoolResourceInFlight(f.pool.Members[0].ResourceKey)
-		return e == nil && n == 0
-	}, 2*time.Second, 10*time.Millisecond)
-	assert.True(t, service.AutoPoolRuntimeSnapshot(f.pool)[0].SafeToReclaim)
-	paused := f.request(t, "/v1/chat/completions", `{"model":"llm-auto","messages":[{"role":"user","content":"another"}]}`)
-	assert.Equal(t, http.StatusServiceUnavailable, paused.Code)
-	var logs []model.Log
-	require.NoError(t, f.db.Where("user_id = ? AND type = ?", f.user.Id, model.LogTypeConsume).Find(&logs).Error)
-	require.Len(t, logs, 1)
-	assert.Equal(t, 500, logs[0].Quota, fmt.Sprint(logs))
-}
-
-func TestAutoPoolRelayTokenPriceUsesActualModel(t *testing.T) {
-	for _, channelType := range []int{constant.ChannelTypeOpenAI, constant.ChannelTypeVLLM, constant.ChannelTypeSGLang} {
+	for _, channelType := range []int{constant.ChannelTypeOpenAI, constant.ChannelTypeAdvancedCustom} {
 		t.Run(constant.GetChannelTypeName(channelType), func(t *testing.T) {
+			release := make(chan struct{})
+			var closeOnce sync.Once
+			t.Cleanup(func() { closeOnce.Do(func() { close(release) }) })
 			f := newAutoPoolRelayFixture(t, func(w http.ResponseWriter, r *http.Request) {
 				var request struct {
 					Model string `json:"model"`
 				}
 				assert.NoError(t, common.DecodeJson(r.Body, &request))
 				assert.Equal(t, "pool-model-a", request.Model)
-				assert.Equal(t, "/v1/chat/completions", r.URL.Path)
+				if channelType == constant.ChannelTypeAdvancedCustom {
+					assert.Equal(t, "/deployment/pool-model-a/stream", r.URL.Path)
+					assert.Equal(t, "test-upstream-key", r.URL.Query().Get("access_key"))
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, "data: {\"id\":\"stream-test\",\"object\":\"chat.completion.chunk\",\"model\":\"pool-model-a\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"call_test\",\"type\":\"function\",\"function\":{\"name\":\"ping\",\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\n")
+				_, _ = io.WriteString(w, "data: {\"id\":\"stream-test\",\"object\":\"chat.completion.chunk\",\"model\":\"pool-model-a\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":null}]}\n\n")
+				w.(http.Flusher).Flush()
+				select {
+				case <-release:
+				case <-r.Context().Done():
+					return
+				}
+				_, _ = io.WriteString(w, "data: {\"id\":\"stream-test\",\"object\":\"chat.completion.chunk\",\"model\":\"pool-model-a\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\n\ndata: [DONE]\n\n")
+			})
+			if channelType == constant.ChannelTypeAdvancedCustom {
+				f.customChannel(t, 1, []dto.AdvancedCustomRoute{{
+					IncomingPath: "/v1/chat/completions", UpstreamPath: "/deployment/{model}/stream", Converter: "none",
+					Models: []string{"chat-alias"}, Auth: &dto.AdvancedCustomRouteAuth{Type: "query", Name: "access_key", Value: "{api_key}"},
+				}}, "chat-alias")
+				f.pool.Members[0].ChannelModel = "chat-alias"
+				require.NoError(t, service.SaveAutoPoolConfig(f.pool))
+			}
+			gateway := httptest.NewServer(f.engine)
+			t.Cleanup(gateway.Close)
+			r, err := http.NewRequest(http.MethodPost, gateway.URL+"/v1/chat/completions", strings.NewReader(`{"model":"llm-auto","stream":true,"messages":[{"role":"user","content":"call ping"}],"tools":[{"type":"function","function":{"name":"ping","parameters":{"type":"object","properties":{}}}}]}`))
+			require.NoError(t, err)
+			r.Header.Set("Authorization", "Bearer sk-"+f.token.Key)
+			r.Header.Set("Content-Type", "application/json")
+			client := &http.Client{Timeout: 10 * time.Second}
+			response, err := client.Do(r)
+			require.NoError(t, err)
+			defer response.Body.Close()
+			require.Equal(t, http.StatusOK, response.StatusCode)
+			reader := bufio.NewReader(response.Body)
+			first, err := reader.ReadString('\n')
+			require.NoError(t, err)
+			assert.Contains(t, first, "tool_calls")
+			count, err := service.AutoPoolResourceInFlight(f.pool.Members[0].ResourceKey)
+			require.NoError(t, err)
+			assert.Equal(t, 1, count)
+			busy := f.request(t, "/v1/chat/completions", `{"model":"llm-auto","messages":[{"role":"user","content":"another"}]}`)
+			assert.Equal(t, http.StatusServiceUnavailable, busy.Code)
+			for i := range f.pool.Members {
+				f.pool.Members[i].State = "draining"
+			}
+			require.NoError(t, service.SaveAutoPoolConfig(f.pool))
+			assert.False(t, service.AutoPoolRuntimeSnapshot(f.pool)[0].SafeToReclaim)
+			closeOnce.Do(func() { close(release) })
+			tail, err := io.ReadAll(reader)
+			require.NoError(t, err)
+			assert.Contains(t, string(tail), "[DONE]")
+			// The request middleware releases after the handler's settlement, so
+			// synchronize through the observed lease count, not an arbitrary sleep.
+			require.Eventually(t, func() bool {
+				n, e := service.AutoPoolResourceInFlight(f.pool.Members[0].ResourceKey)
+				return e == nil && n == 0
+			}, 2*time.Second, 10*time.Millisecond)
+			assert.True(t, service.AutoPoolRuntimeSnapshot(f.pool)[0].SafeToReclaim)
+			paused := f.request(t, "/v1/chat/completions", `{"model":"llm-auto","messages":[{"role":"user","content":"another"}]}`)
+			assert.Equal(t, http.StatusServiceUnavailable, paused.Code)
+			var logs []model.Log
+			require.NoError(t, f.db.Where("user_id = ? AND type = ?", f.user.Id, model.LogTypeConsume).Find(&logs).Error)
+			require.Len(t, logs, 1)
+			assert.Equal(t, 500, logs[0].Quota, fmt.Sprint(logs))
+		})
+	}
+}
+
+func TestAutoPoolRelayTokenPriceUsesActualModel(t *testing.T) {
+	for _, tc := range []struct {
+		channelType int
+		path        string
+	}{
+		{constant.ChannelTypeOpenAI, "/v1/chat/completions"},
+		{constant.ChannelTypeVLLM, "/v1/chat/completions"},
+		{constant.ChannelTypeSGLang, "/v1/chat/completions"},
+		{constant.ChannelTypeAdvancedCustom, "/v1/chat/completions"},
+		{constant.ChannelTypeAdvancedCustom, "/pg/chat/completions"},
+	} {
+		t.Run(constant.GetChannelTypeName(tc.channelType)+tc.path, func(t *testing.T) {
+			channelType := tc.channelType
+			var attempts atomic.Int32
+			f := newAutoPoolRelayFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				attempts.Add(1)
+				var request struct {
+					Model string `json:"model"`
+				}
+				assert.NoError(t, common.DecodeJson(r.Body, &request))
+				assert.Equal(t, "pool-model-a", request.Model)
+				if channelType == constant.ChannelTypeAdvancedCustom {
+					assert.Equal(t, "/deployment/pool-model-a/chat", r.URL.Path)
+					assert.Equal(t, "test-upstream-key", r.Header.Get("X-Provider-Key"))
+				} else {
+					assert.Equal(t, "/v1/chat/completions", r.URL.Path)
+				}
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = io.WriteString(w, `{"id":"chatcmpl-test","object":"chat.completion","model":"pool-model-a","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`)
 			})
 			require.NoError(t, f.db.Model(&model.Channel{}).Where("id = ?", 1).Update("type", channelType).Error)
+			if channelType == constant.ChannelTypeAdvancedCustom {
+				f.customChannel(t, 1, []dto.AdvancedCustomRoute{{
+					IncomingPath: "/v1/chat/completions", UpstreamPath: "/deployment/{model}/chat", Converter: "none",
+					Models: []string{"pool-model-a"}, Auth: &dto.AdvancedCustomRouteAuth{Type: "header", Name: "X-Provider-Key", Value: "{api_key}"},
+				}}, "")
+				require.NoError(t, service.SaveAutoPoolConfig(f.pool))
+			}
 			config.UpdateConfigFromMap(config.GlobalConfig.Get("billing_setting"), map[string]string{"billing_mode": "{}", "billing_expr": "{}"})
 			require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"pool-model-a":2,"llm-auto":999}`))
 			require.NoError(t, ratio_setting.UpdateCompletionRatioByJSONString(`{"pool-model-a":3,"llm-auto":999}`))
-			w := f.request(t, "/v1/chat/completions", `{"model":"llm-auto","messages":[{"role":"user","content":"hello"}]}`)
+			w := f.request(t, tc.path, `{"model":"llm-auto","messages":[{"role":"user","content":"hello"}]}`)
 			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			assert.Equal(t, int32(1), attempts.Load())
+			assert.Equal(t, "pool-model-a", w.Header().Get("X-LLM-Model"))
 			var logs []model.Log
 			require.NoError(t, f.db.Where("user_id = ? AND type = ?", f.user.Id, model.LogTypeConsume).Find(&logs).Error)
 			require.Len(t, logs, 1)
 			assert.Equal(t, 50, logs[0].Quota, "2 * (10 input + 5 output * 3)")
 			assert.Equal(t, "pool-model-a", logs[0].ModelName)
+			var user model.User
+			require.NoError(t, f.db.First(&user, f.user.Id).Error)
+			assert.Equal(t, 99950, user.Quota)
+			var token model.Token
+			require.NoError(t, f.db.First(&token, f.token.Id).Error)
+			if tc.path == "/pg/chat/completions" {
+				assert.Equal(t, 100000, token.RemainQuota, "playground usage debits the wallet, not an API token")
+			} else {
+				assert.Equal(t, 99950, token.RemainQuota)
+			}
+		})
+	}
+}
+
+func (f *autoPoolRelayFixture) customChannel(t *testing.T, id int, routes []dto.AdvancedCustomRoute, alias string) {
+	t.Helper()
+	var channel model.Channel
+	require.NoError(t, f.db.First(&channel, id).Error)
+	channel.Type = constant.ChannelTypeAdvancedCustom
+	channel.SetOtherSettings(dto.ChannelOtherSettings{AdvancedCustom: &dto.AdvancedCustomConfig{Routes: routes}})
+	if alias != "" {
+		mapping, err := common.Marshal(map[string]string{alias: channel.Models})
+		require.NoError(t, err)
+		channel.Models = alias
+		channel.ModelMapping = common.GetPointer(string(mapping))
+	}
+	require.NoError(t, f.db.Save(&channel).Error)
+}
+
+func TestAutoPoolCustomRoutesSelectSupportedEndpointAndProbeWithoutCharge(t *testing.T) {
+	for _, converter := range []string{"none", "openai_responses_to_openai_chat_completions"} {
+		t.Run(converter, func(t *testing.T) {
+			var attempts atomic.Int32
+			f := newAutoPoolRelayFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				attempts.Add(1)
+				var request map[string]any
+				assert.NoError(t, common.DecodeJson(r.Body, &request))
+				assert.Equal(t, "pool-model-b", request["model"], "both the health probe and real request must send the terminal model")
+				assert.Equal(t, "/deployment/pool-model-b/responses", r.URL.Path)
+				assert.Equal(t, "test-upstream-key", r.Header.Get("X-Provider-Key"))
+				w.Header().Set("Content-Type", "application/json")
+				if converter == "none" {
+					assert.Contains(t, request, "input")
+					_, _ = io.WriteString(w, `{"id":"resp-test","object":"response","status":"completed","model":"pool-model-b","output":[{"type":"message","id":"msg-test","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}`)
+				} else {
+					assert.Contains(t, request, "messages")
+					assert.NotContains(t, request, "input")
+					_, _ = io.WriteString(w, `{"id":"chatcmpl-test","object":"chat.completion","model":"pool-model-b","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`)
+				}
+			})
+			f.customChannel(t, 1, []dto.AdvancedCustomRoute{{
+				IncomingPath: "/v1/chat/completions", UpstreamPath: "/chat-only", Converter: "none", Models: []string{"chat-alias"},
+			}}, "chat-alias")
+			f.customChannel(t, 2, []dto.AdvancedCustomRoute{{
+				IncomingPath: "/v1/responses", UpstreamPath: "/deployment/{model}/responses", Converter: converter,
+				Models: []string{"responses-alias"}, Auth: &dto.AdvancedCustomRouteAuth{Type: "header", Name: "X-Provider-Key", Value: "{api_key}"},
+			}}, "responses-alias")
+			var configured model.Channel
+			require.NoError(t, f.db.First(&configured, 2).Error)
+			require.NoError(t, configured.UpdateAbilities(f.db))
+			common.MemoryCacheEnabled = true
+			model.InitChannelCache()
+			cached, err := model.CacheGetChannel(2)
+			require.NoError(t, err)
+			originalSettings, originalMapping := cached.OtherSettings, *cached.ModelMapping
+			f.pool.Members[0].ChannelModel = "chat-alias"
+			f.pool.Members[1].ChannelModel = "responses-alias"
+			require.NoError(t, service.SaveAutoPoolConfig(f.pool))
+
+			unsupported := f.request(t, "/v1/responses", `{"model":"llm-auto","input":"hello"}`)
+			assert.Equal(t, http.StatusServiceUnavailable, unsupported.Code, unsupported.Body.String())
+			assert.Zero(t, attempts.Load(), "a Chat-only member must be excluded before upstream submission")
+			f.pool.Members[1].Weight = 100
+			require.NoError(t, service.SaveAutoPoolConfig(f.pool))
+
+			// A Responses-only member must be probed through its configured
+			// route even though its public alias differs from the billed model.
+			require.NoError(t, f.db.Model(&model.User{}).Where("id = ?", f.user.Id).Update("role", common.RoleRootUser).Error)
+			require.True(t, probeAutoPoolMember(context.Background(), f.pool, "second"))
+			assert.Equal(t, int32(1), attempts.Load())
+			health, err := service.ReadAutoPoolHealth(f.pool, f.pool.Members[1])
+			require.NoError(t, err)
+			assert.Equal(t, "healthy", health.Health)
+			var user model.User
+			require.NoError(t, f.db.First(&user, f.user.Id).Error)
+			assert.Equal(t, 100000, user.Quota, "health probes do not debit customer credit")
+			assert.Zero(t, user.UsedQuota)
+			var token model.Token
+			require.NoError(t, f.db.First(&token, f.token.Id).Error)
+			assert.Equal(t, 100000, token.RemainQuota)
+			// Channel tests retain their own tokenless diagnostic log; they
+			// must not create a billed request for the customer's API token.
+			var count int64
+			require.NoError(t, f.db.Model(&model.Log{}).Where("user_id = ? AND type = ? AND token_id = ?", f.user.Id, model.LogTypeConsume, f.token.Id).Count(&count).Error)
+			assert.Zero(t, count)
+			inFlight, err := service.AutoPoolResourceInFlight(f.pool.Members[1].ResourceKey)
+			require.NoError(t, err)
+			assert.Zero(t, inFlight)
+
+			w := f.request(t, "/v1/responses", `{"model":"llm-auto","input":"hello"}`)
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			assert.Equal(t, int32(2), attempts.Load())
+			assert.Equal(t, "pool-model-b", w.Header().Get("X-LLM-Model"))
+			assert.Contains(t, w.Body.String(), `"object":"response"`)
+			var logs []model.Log
+			require.NoError(t, f.db.Where("user_id = ? AND type = ? AND token_id = ?", f.user.Id, model.LogTypeConsume, f.token.Id).Find(&logs).Error)
+			require.Len(t, logs, 1)
+			assert.Equal(t, "pool-model-b", logs[0].ModelName)
+			assert.Equal(t, 1500, logs[0].Quota, "the alias and llm-auto price never replace the actual-model price")
+			require.NoError(t, f.db.First(&user, f.user.Id).Error)
+			assert.Equal(t, 98500, user.Quota)
+			require.NoError(t, f.db.First(&token, f.token.Id).Error)
+			assert.Equal(t, 98500, token.RemainQuota)
+
+			// Pool preparation must not overwrite the shared channel's model
+			// restrictions or mappings used by ordinary explicit-model calls.
+			assert.Equal(t, originalSettings, cached.OtherSettings)
+			assert.Equal(t, originalMapping, *cached.ModelMapping)
+			require.NoError(t, f.db.First(&configured, 2).Error)
+			assert.Equal(t, originalSettings, configured.OtherSettings)
+			token.ModelLimits = "llm-auto,responses-alias"
+			require.NoError(t, token.Update())
+			require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"responses-alias":0.002}`))
+			direct := f.request(t, "/v1/responses", `{"model":"responses-alias","input":"hello"}`)
+			require.Equal(t, http.StatusOK, direct.Code, direct.Body.String())
+			assert.Equal(t, int32(3), attempts.Load())
+			assert.Empty(t, direct.Header().Get("X-LLM-Model"))
+			require.NoError(t, f.db.First(&user, f.user.Id).Error)
+			assert.Equal(t, 97500, user.Quota, "ordinary requests retain the alias's configured price")
+			require.NoError(t, f.db.First(&token, f.token.Id).Error)
+			assert.Equal(t, 97500, token.RemainQuota)
+
+			if converter == "none" {
+				// An administrator can edit the channel after adding it to the
+				// pool. Enforce compatibility again on the server at selection.
+				other := configured.GetOtherSettings()
+				other.AdvancedCustom.Routes[0].PassThroughBodyEnabled = true
+				require.NoError(t, other.AdvancedCustom.Validate())
+				configured.SetOtherSettings(other)
+				require.NoError(t, f.db.Model(&configured).Update("settings", configured.OtherSettings).Error)
+				model.CacheUpdateChannel(&configured)
+				blocked := f.request(t, "/v1/responses", `{"model":"llm-auto","input":"hello"}`)
+				assert.Equal(t, http.StatusServiceUnavailable, blocked.Code, blocked.Body.String())
+				assert.Equal(t, int32(3), attempts.Load(), "unsafe passthrough must never reach upstream")
+				require.NoError(t, f.db.First(&user, f.user.Id).Error)
+				assert.Equal(t, 97500, user.Quota)
+				require.NoError(t, f.db.First(&token, f.token.Id).Error)
+				assert.Equal(t, 97500, token.RemainQuota)
+				require.NoError(t, f.db.Model(&model.Log{}).Where("user_id = ? AND type = ? AND token_id = ?", f.user.Id, model.LogTypeConsume, f.token.Id).Count(&count).Error)
+				assert.Equal(t, int64(2), count, "only the pool and explicit-model requests are billed")
+				inFlight, err = service.AutoPoolResourceInFlight(f.pool.Members[1].ResourceKey)
+				require.NoError(t, err)
+				assert.Zero(t, inFlight)
+			}
 		})
 	}
 }

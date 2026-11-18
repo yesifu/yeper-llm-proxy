@@ -52,7 +52,7 @@ export function ChannelPicker(props: Props) {
   const channel = props.channels.find((item) => String(item.id) === channelID)
   const models = channel ? availablePoolModels(channel, props.members) : []
   const selected = selectedModels.filter((value) =>
-    models.some((model) => model.actual_model === value)
+    models.some((model) => model.name === value)
   )
   const exceedsLimit = props.members.length + selected.length > 256
   const canAdd =
@@ -127,7 +127,7 @@ export function ChannelPicker(props: Props) {
                     ? availablePoolModels(next, props.members)
                     : []
                   setSelectedModels(
-                    available.length === 1 ? [available[0].actual_model] : []
+                    available.length === 1 ? [available[0].name] : []
                   )
                 }}
               />
@@ -154,7 +154,7 @@ export function ChannelPicker(props: Props) {
                   onChange={setSelectedModels}
                   maxVisibleChips={6}
                   options={models.map((model) => ({
-                    value: model.actual_model,
+                    value: model.name,
                     label: model.name,
                     hint:
                       model.name !== model.actual_model
@@ -168,7 +168,7 @@ export function ChannelPicker(props: Props) {
                   size='sm'
                   className='w-fit'
                   onClick={() =>
-                    setSelectedModels(models.map((model) => model.actual_model))
+                    setSelectedModels(models.map((model) => model.name))
                   }
                 >
                   {t('All available models')}

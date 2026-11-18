@@ -163,6 +163,9 @@ func TestAutoPoolPersistenceDatabaseMatrix(t *testing.T) {
 			changed := config
 			changed.Members = append([]service.AutoPoolMember(nil), config.Members...)
 			changed.Members[0].Weight = 75
+			// Older saved members have no source model. Adding the equivalent
+			// explicit name must survive an options reload without a migration.
+			changed.Members[0].ChannelModel = "model-a"
 			assert.ErrorIs(t, service.SaveAutoPoolConfig(changed), writeFailure)
 			require.NoError(t, db.Callback().Update().Remove("auto_pool_test_write_failure"))
 			current, err := service.GetAutoPoolConfig()
@@ -176,6 +179,7 @@ func TestAutoPoolPersistenceDatabaseMatrix(t *testing.T) {
 			current, err = service.GetAutoPoolConfig()
 			require.NoError(t, err)
 			assert.Equal(t, 75, current.Members[0].Weight)
+			assert.Equal(t, "model-a", current.Members[0].ChannelModel)
 		})
 	}
 }
@@ -291,7 +295,12 @@ func TestAutoPoolChannelCatalogDatabaseMatrix(t *testing.T) {
 				{name: "disabled", models: "actual", status: common.ChannelStatusManuallyDisabled, reason: "disabled"},
 				{name: "body passthrough", models: "actual", setting: `{"pass_through_body_enabled":true}`, reason: "passthrough"},
 				{name: "parameter override", models: "actual", parameters: `{"model":"private-override-value"}`, reason: "parameter_override"},
-				{name: "custom route", models: "actual", channelType: constant.ChannelTypeAdvancedCustom, other: `{"advanced_custom":{"advanced_routes":[{"incoming_path":"/v1/chat/completions","upstream_path":"https://private-route.example?secret=private-route-key"}]}}`, reason: "custom_route"},
+				{name: "custom route", models: "actual", channelType: constant.ChannelTypeAdvancedCustom, other: `{"advanced_custom":{"advanced_routes":[{"incoming_path":"/v1/chat/completions","upstream_path":"https://private-route.example?secret=private-route-key"}]}}`, wantModels: []autoPoolChannelModel{{"actual", "actual"}}},
+				{name: "model scoped route", models: "alias,unmatched", mapping: `{"alias":"actual"}`, channelType: constant.ChannelTypeAdvancedCustom, other: `{"advanced_custom":{"advanced_routes":[{"incoming_path":"/v1/chat/completions","upstream_path":"/private-chat/{model}","models":["alias"]}]}}`, wantModels: []autoPoolChannelModel{{"alias", "actual"}}},
+				{name: "responses route", models: "actual", channelType: constant.ChannelTypeAdvancedCustom, other: `{"advanced_custom":{"advanced_routes":[{"incoming_path":"/v1/responses","upstream_path":"/private-responses"}]}}`, wantModels: []autoPoolChannelModel{{"actual", "actual"}}},
+				{name: "route body passthrough", models: "actual", channelType: constant.ChannelTypeAdvancedCustom, other: `{"advanced_custom":{"advanced_routes":[{"incoming_path":"/v1/chat/completions","upstream_path":"/private-chat","pass_through_body_enabled":true}]}}`, reason: "unsupported_routes"},
+				{name: "embedding only route", models: "actual", channelType: constant.ChannelTypeAdvancedCustom, other: `{"advanced_custom":{"advanced_routes":[{"incoming_path":"/v1/embeddings","upstream_path":"/private-embeddings"}]}}`, reason: "unsupported_routes"},
+				{name: "missing custom routes", models: "actual", channelType: constant.ChannelTypeAdvancedCustom, reason: "invalid_channel_settings"},
 				{name: "vLLM preset", models: "actual", channelType: constant.ChannelTypeVLLM, wantModels: []autoPoolChannelModel{{"actual", "actual"}}},
 				{name: "SGLang preset", models: "actual", channelType: constant.ChannelTypeSGLang, wantModels: []autoPoolChannelModel{{"actual", "actual"}}},
 				{name: "mapping cycle", models: "alias", mapping: `{"alias":"second","second":"alias"}`, reason: "invalid_model_mapping"},

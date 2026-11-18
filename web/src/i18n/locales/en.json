@@ -4358,6 +4358,7 @@
     "No plugins available for binding": "No plugins available for binding",
     "No plugins of this kind": "No plugins of this kind",
     "No pool members. Add an existing channel to get started.": "No pool members. Add an existing channel to get started.",
+    "No pool-compatible Chat or Responses route matches the configured models. Check route matching and request passthrough settings.": "No pool-compatible Chat or Responses route matches the configured models. Check route matching and request passthrough settings.",
     "No preceding rule matched": "No preceding rule matched",
     "No preference": "No preference",
     "No prefill groups yet": "No prefill groups yet",

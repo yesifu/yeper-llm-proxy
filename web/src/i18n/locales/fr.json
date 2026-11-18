@@ -4358,6 +4358,7 @@
     "No plugins available for binding": "Aucune extension disponible à associer",
     "No plugins of this kind": "Aucun plugin de ce type",
     "No pool members. Add an existing channel to get started.": "Aucun membre. Ajoutez un canal existant.",
+    "No pool-compatible Chat or Responses route matches the configured models. Check route matching and request passthrough settings.": "Aucune route Chat ou Responses compatible avec le pool ne correspond aux modèles configurés. Vérifiez les règles de routage et la transmission directe des requêtes.",
     "No preceding rule matched": "Aucune règle précédente ne correspond",
     "No preference": "Aucune préférence",
     "No prefill groups yet": "Aucun groupe de préremplissage pour l'instant",

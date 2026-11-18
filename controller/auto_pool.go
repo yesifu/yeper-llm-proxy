@@ -12,9 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -51,6 +49,7 @@ func GetAutoPoolChannels(c *gin.Context) {
 		mappingContext := &gin.Context{}
 		mappingContext.Set("model_mapping", channel.GetModelMapping())
 		seen := map[string]bool{}
+		hasTextRouteCandidate := false
 		for _, name := range channel.GetModels() {
 			name = strings.TrimSpace(name)
 			if name == "" || name == service.AutoPoolModel || seen[name] {
@@ -72,10 +71,20 @@ func GetAutoPoolChannels(c *gin.Context) {
 				option.Models = []autoPoolChannelModel{}
 				break
 			}
+			hasTextRouteCandidate = true
+			if option.IncompatibilityReason == "" {
+				member := service.AutoPoolMember{ChannelID: channel.Id, ChannelModel: name, ActualModel: actual}
+				if _, _, err := service.PrepareAutoPoolProbeChannel(&channel, member); err != nil {
+					continue
+				}
+			}
 			option.Models = append(option.Models, autoPoolChannelModel{Name: name, ActualModel: actual})
 		}
 		if option.IncompatibilityReason == "" && len(option.Models) == 0 {
 			option.IncompatibilityReason = "no_models"
+			if hasTextRouteCandidate {
+				option.IncompatibilityReason = "unsupported_routes"
+			}
 		}
 		option.Compatible = option.IncompatibilityReason == ""
 		options = append(options, option)
@@ -83,43 +92,11 @@ func GetAutoPoolChannels(c *gin.Context) {
 	common.ApiSuccess(c, options)
 }
 
-// Match the pool's compatibility checks without the channel settings getters:
-// those getters repair malformed stored JSON, whereas this endpoint is read-only.
 func autoPoolChannelUnavailableReason(channel *model.Channel) string {
 	if channel.Status != common.ChannelStatusEnabled {
 		return "disabled"
 	}
-	settings := dto.ChannelSettings{}
-	if channel.Setting != nil && *channel.Setting != "" {
-		if err := common.UnmarshalJsonStr(*channel.Setting, &settings); err != nil {
-			return "invalid_channel_settings"
-		}
-	}
-	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || settings.PassThroughBodyEnabled {
-		return "passthrough"
-	}
-	parameters := map[string]any{}
-	if channel.ParamOverride != nil && *channel.ParamOverride != "" {
-		if err := common.UnmarshalJsonStr(*channel.ParamOverride, &parameters); err != nil {
-			return "invalid_channel_settings"
-		}
-	}
-	if len(parameters) > 0 {
-		return "parameter_override"
-	}
-	if common.GetAdvancedCustomPreset(channel.Type) != nil {
-		return ""
-	}
-	other := dto.ChannelOtherSettings{}
-	if channel.OtherSettings != "" {
-		if err := common.UnmarshalJsonStr(channel.OtherSettings, &other); err != nil {
-			return "invalid_channel_settings"
-		}
-	}
-	if other.AdvancedCustom != nil && len(other.AdvancedCustom.Routes) > 0 {
-		return "custom_route"
-	}
-	return ""
+	return service.AutoPoolChannelUnavailableReason(channel)
 }
 
 func GetAutoPool(c *gin.Context) {
@@ -183,7 +160,11 @@ func probeAutoPoolMember(parent context.Context, config service.AutoPoolConfig, 
 	}
 	defer lease.Release()
 	channel, err := model.CacheGetChannel(member.ChannelID)
-	if err != nil || channel == nil || !service.AutoPoolChannelCompatible(channel) {
+	if err != nil || channel == nil || channel.Status != common.ChannelStatusEnabled {
+		return false
+	}
+	probeChannel, endpointType, err := service.PrepareAutoPoolProbeChannel(channel, member)
+	if err != nil {
 		return false
 	}
 	userID, err := resolveChannelTestUserID(nil)
@@ -192,10 +173,9 @@ func probeAutoPoolMember(parent context.Context, config service.AutoPoolConfig, 
 	}
 	// Probe the terminal upstream model, using the same provider adapter as
 	// real traffic. Disable mappings on this request-local copy only.
-	probeChannel := *channel
 	probeChannel.ModelMapping = nil
 	started := time.Now()
-	result := testChannel(leaseCtx, &probeChannel, userID, member.ActualModel, "", false)
+	result := testChannel(leaseCtx, probeChannel, userID, member.ActualModel, string(endpointType), false)
 	healthy := result.localErr == nil && result.newAPIError == nil
 	// Provider errors can contain URLs, keys and response bodies. The runtime
 	// API retains only a generic failure reason and timing.

@@ -9,7 +9,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/model_setting"
 )
 
 const AutoPoolOptionKey = "AutoPoolConfig"
@@ -31,6 +30,7 @@ type AutoPoolConfig struct {
 type AutoPoolMember struct {
 	ID             string `json:"id"`
 	ChannelID      int    `json:"channel_id"`
+	ChannelModel   string `json:"channel_model,omitempty"`
 	ActualModel    string `json:"actual_model"`
 	Weight         int    `json:"weight"`
 	ResourceKey    string `json:"resource_key"`
@@ -39,6 +39,15 @@ type AutoPoolMember struct {
 	SupportsTools  bool   `json:"supports_tools"`
 	SupportsVision bool   `json:"supports_vision"`
 	ContextWindow  int    `json:"context_window"`
+}
+
+// SourceModel retains the configured channel alias used to select a custom
+// route. Older members stored only the terminal upstream model.
+func (member AutoPoolMember) SourceModel() string {
+	if member.ChannelModel != "" {
+		return member.ChannelModel
+	}
+	return member.ActualModel
 }
 
 func IsAutoPoolModel(name string) bool { return name == AutoPoolModel }
@@ -83,6 +92,9 @@ func ValidateAutoPoolConfig(config AutoPoolConfig) error {
 		if member.ChannelID < 1 || member.ActualModel == "" || member.ActualModel != strings.TrimSpace(member.ActualModel) || len(member.ActualModel) > 256 || member.ActualModel == AutoPoolModel || strings.ContainsAny(member.ActualModel, "\r\n\t") {
 			return fmt.Errorf("member %s must name an existing channel and a terminal upstream model", member.ID)
 		}
+		if member.ChannelModel != "" && (member.ChannelModel != strings.TrimSpace(member.ChannelModel) || len(member.ChannelModel) > 256 || member.ChannelModel == AutoPoolModel || strings.ContainsAny(member.ChannelModel, "\r\n\t")) {
+			return fmt.Errorf("member %s has an invalid channel model", member.ID)
+		}
 		if member.Weight < 0 || member.Weight > 10000 || member.MaxConcurrency < 1 || member.MaxConcurrency > 10000 || member.ContextWindow < 0 || member.ContextWindow > 10000000 {
 			return fmt.Errorf("member %s has invalid weight, capacity or context window", member.ID)
 		}
@@ -95,28 +107,6 @@ func ValidateAutoPoolConfig(config AutoPoolConfig) error {
 		capacities[member.ResourceKey] = member.MaxConcurrency
 	}
 	return nil
-}
-
-// AutoPoolChannelCompatible prevents overrides from silently changing the
-// selected model after its price has been reserved. Explicit alias mapping is
-// installed by the gateway after selection, so existing model mappings are not
-// used for pool requests.
-func AutoPoolChannelCompatible(channel *model.Channel) bool {
-	if channel == nil || model_setting.GetGlobalSettings().PassThroughRequestEnabled || channel.GetSetting().PassThroughBodyEnabled {
-		return false
-	}
-	// Arbitrary parameter overrides and custom routes can replace model/body.
-	if len(channel.GetParamOverride()) != 0 {
-		return false
-	}
-	// vLLM and SGLang are implemented with immutable OpenAI-compatible route
-	// presets. They still serialize the mapped request model, unlike arbitrary
-	// administrator-defined custom routes.
-	if common.GetAdvancedCustomPreset(channel.Type) != nil {
-		return true
-	}
-	settings := channel.GetOtherSettings()
-	return settings.AdvancedCustom == nil || len(settings.AdvancedCustom.Routes) == 0
 }
 
 func SaveAutoPoolConfig(config AutoPoolConfig) error {
@@ -133,8 +123,8 @@ func SaveAutoPoolConfig(config AutoPoolConfig) error {
 		if err != nil || channel == nil {
 			return fmt.Errorf("channel for member %s does not exist", member.ID)
 		}
-		if !AutoPoolChannelCompatible(channel) {
-			return fmt.Errorf("member %s requires a channel without passthrough, parameter overrides or custom routes", member.ID)
+		if _, _, err := PrepareAutoPoolProbeChannel(channel, member); err != nil {
+			return fmt.Errorf("member %s: %w", member.ID, err)
 		}
 	}
 	previous, err := GetAutoPoolConfig()
@@ -146,7 +136,7 @@ func SaveAutoPoolConfig(config AutoPoolConfig) error {
 	for _, old := range previous.Members {
 		unchanged := false
 		for _, member := range config.Members {
-			if member.ID == old.ID && member.ResourceKey == old.ResourceKey && member.ChannelID == old.ChannelID && member.ActualModel == old.ActualModel {
+			if member.ID == old.ID && member.ResourceKey == old.ResourceKey && member.ChannelID == old.ChannelID && member.ActualModel == old.ActualModel && member.SourceModel() == old.SourceModel() {
 				unchanged = true
 				break
 			}

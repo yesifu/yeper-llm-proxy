@@ -30,6 +30,7 @@ export const autoPoolSchema = z.object({
       z.object({
         id: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/),
         channel_id: z.number().int().positive(),
+        channel_model: z.string().trim().min(1).max(256).optional(),
         actual_model: z.string().trim().min(1).max(256),
         weight: z.number().int().min(0).max(10000),
         resource_key: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/),

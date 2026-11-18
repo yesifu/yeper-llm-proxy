@@ -411,6 +411,12 @@ func (a *Adaptor) resolve(c *gin.Context, info *relaycommon.RelayInfo) error {
 }
 
 func incomingRequestPath(c *gin.Context, info *relaycommon.RelayInfo) string {
+	// Playground requests keep their /pg URL for session/accounting semantics;
+	// GenRelayInfo already records the equivalent provider endpoint here.
+	if info != nil && info.IsPlayground {
+		path, _, _ := strings.Cut(info.RequestURLPath, "?")
+		return path
+	}
 	if c != nil && c.Request != nil && c.Request.URL != nil {
 		return c.Request.URL.Path
 	}

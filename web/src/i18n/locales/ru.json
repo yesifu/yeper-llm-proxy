@@ -4358,6 +4358,7 @@
     "No plugins available for binding": "Нет доступных для привязки плагинов",
     "No plugins of this kind": "Нет плагинов этого вида",
     "No pool members. Add an existing channel to get started.": "Нет узлов. Добавьте существующий канал.",
+    "No pool-compatible Chat or Responses route matches the configured models. Check route matching and request passthrough settings.": "Для настроенных моделей нет подходящего пулу маршрута Chat или Responses. Проверьте условия выбора маршрутов и настройки передачи запросов без изменений.",
     "No preceding rule matched": "Ни одно предыдущее правило не совпало",
     "No preference": "Без предпочтений",
     "No prefill groups yet": "Пока нет групп предзаполнения",

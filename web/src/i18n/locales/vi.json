@@ -4358,6 +4358,7 @@
     "No plugins available for binding": "Không có plugin để liên kết",
     "No plugins of this kind": "Không có plugin loại này",
     "No pool members. Add an existing channel to get started.": "Chưa có nút. Thêm một kênh hiện có để bắt đầu.",
+    "No pool-compatible Chat or Responses route matches the configured models. Check route matching and request passthrough settings.": "Không có tuyến Chat hoặc Responses tương thích với pool khớp với các mô hình đã cấu hình. Kiểm tra điều kiện khớp tuyến và cài đặt chuyển tiếp nguyên trạng yêu cầu.",
     "No preceding rule matched": "Không khớp quy tắc nào trước đó",
     "No preference": "Không có ưu tiên",
     "No prefill groups yet": "Chưa có nhóm điền sẵn nào",

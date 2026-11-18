@@ -34,8 +34,10 @@ export function channelUnavailableMessage(
       return t('Request passthrough is not supported by the auto pool.')
     case 'parameter_override':
       return t('Parameter overrides are not supported by the auto pool.')
-    case 'custom_route':
-      return t('Custom routes are not supported by the auto pool.')
+    case 'unsupported_routes':
+      return t(
+        'No pool-compatible Chat or Responses route matches the configured models. Check route matching and request passthrough settings.'
+      )
     case 'invalid_model_mapping':
       return t('Fix the channel model mapping before adding it.')
     case 'invalid_channel_settings':
@@ -54,12 +56,12 @@ export function availablePoolModels(
   const used = new Set(
     members
       .filter((member) => member.channel_id === channel.id)
-      .map((member) => member.actual_model)
+      .map((member) => member.channel_model ?? member.actual_model)
   )
   const result: PoolChannel['models'] = []
   for (const model of channel.models) {
-    if (used.has(model.actual_model)) continue
-    used.add(model.actual_model)
+    if (used.has(model.name)) continue
+    used.add(model.name)
     result.push(model)
   }
   return result
@@ -78,10 +80,11 @@ export function createPoolMembers(
     members.find((member) => member.resource_key === resourceKey)
       ?.max_concurrency ?? 1
   return available
-    .filter((model) => selectedModels.includes(model.actual_model))
+    .filter((model) => selectedModels.includes(model.name))
     .map((model) => ({
       id: `node-${nanoid()}`,
       channel_id: channel.id,
+      channel_model: model.name,
       actual_model: model.actual_model,
       resource_key: resourceKey,
       max_concurrency: capacity,

@@ -93,7 +93,7 @@ function renderForm(value = data) {
 }
 
 describe('Auto pool editor', () => {
-  it('adds a configured single-model channel without typing node or model identifiers', async () => {
+  it('adds a configured custom-route channel and preserves its source alias when saving', async () => {
     const user = userEvent.setup()
     vi.stubGlobal('crypto', {
       getRandomValues: crypto.getRandomValues.bind(crypto),
@@ -105,9 +105,9 @@ describe('Auto pool editor', () => {
           {
             id: 2,
             name: 'H20 server',
-            type: 1,
+            type: 58,
             status: 1,
-            models: [{ name: 'qwen', actual_model: 'qwen' }],
+            models: [{ name: 'qwen-chat', actual_model: 'qwen' }],
             compatible: true,
             incompatibility_reason: '',
           },
@@ -141,6 +141,7 @@ describe('Auto pool editor', () => {
           members: [
             expect.objectContaining({
               channel_id: 2,
+              channel_model: 'qwen-chat',
               actual_model: 'qwen',
               resource_key: 'channel-2',
               max_concurrency: 1,
@@ -252,7 +253,7 @@ describe('Auto pool editor', () => {
     expect(put).not.toHaveBeenCalled()
   })
 
-  it('adds only new terminal models in a batch and reuses the saved resource capacity', async () => {
+  it('adds distinct source aliases in a batch and reuses the saved resource capacity', async () => {
     const user = userEvent.setup()
     vi.spyOn(api, 'get').mockResolvedValue({
       data: {
@@ -287,12 +288,12 @@ describe('Auto pool editor', () => {
       within(screen.getByRole('dialog')).getByText('friendly-alias')
     ).toBeVisible()
     expect(
-      within(screen.getByRole('dialog')).queryByText('second-alias')
-    ).not.toBeInTheDocument()
+      within(screen.getByRole('dialog')).getByText('second-alias')
+    ).toBeVisible()
     await user.click(
       screen.getByRole('button', { name: 'Add selected models' })
     )
-    expect(screen.getAllByLabelText('Concurrency limit')).toHaveLength(3)
+    expect(screen.getAllByLabelText('Concurrency limit')).toHaveLength(4)
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => expect(put).toHaveBeenCalled())
     const saved = put.mock.calls[0][1] as AutoPoolData['config']
@@ -300,10 +301,12 @@ describe('Auto pool editor', () => {
     expect(saved.members.map((member) => member.actual_model)).toEqual([
       'qwen',
       'model-two',
+      'model-two',
       'model-three',
     ])
     expect(saved.members.slice(1)).toEqual([
       expect.objectContaining({
+        channel_model: 'friendly-alias',
         resource_key: 'gpu-a',
         max_concurrency: 2,
         state: 'accepting',
@@ -311,6 +314,15 @@ describe('Auto pool editor', () => {
         supports_vision: false,
       }),
       expect.objectContaining({
+        channel_model: 'second-alias',
+        resource_key: 'gpu-a',
+        max_concurrency: 2,
+        state: 'accepting',
+        supports_tools: false,
+        supports_vision: false,
+      }),
+      expect.objectContaining({
+        channel_model: 'model-three',
         resource_key: 'gpu-a',
         max_concurrency: 2,
         state: 'accepting',
@@ -318,7 +330,7 @@ describe('Auto pool editor', () => {
         supports_vision: false,
       }),
     ])
-    expect(new Set(saved.members.map((member) => member.id)).size).toBe(3)
+    expect(new Set(saved.members.map((member) => member.id)).size).toBe(4)
   })
 
   it('explains incompatible channels before allowing any pool member to be added', async () => {
@@ -330,7 +342,7 @@ describe('Auto pool editor', () => {
           {
             ...channel,
             compatible: false,
-            incompatibility_reason: 'custom_route',
+            incompatibility_reason: 'unsupported_routes',
           },
         ],
       },
@@ -341,13 +353,109 @@ describe('Auto pool editor', () => {
     await user.click(await screen.findByRole('option', { name: /GPU server/ }))
     expect(
       within(screen.getByRole('dialog')).getByRole('status')
-    ).toHaveTextContent('Custom routes are not supported by the auto pool.')
+    ).toHaveTextContent(
+      'No pool-compatible Chat or Responses route matches the configured models. Check route matching and request passthrough settings.'
+    )
     expect(
       screen.getByRole('button', { name: 'Add selected models' })
     ).toBeDisabled()
     expect(
       screen.queryByRole('combobox', { name: 'Select models' })
     ).not.toBeInTheDocument()
+  })
+
+  it('selects and retains a second route alias when another alias maps to the same actual model', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(api, 'get').mockResolvedValue({
+      data: {
+        success: true,
+        data: [
+          {
+            ...channel,
+            type: 58,
+            models: [
+              { name: 'qwen-chat', actual_model: 'qwen' },
+              { name: 'qwen-responses', actual_model: 'qwen' },
+            ],
+          },
+        ],
+      },
+    })
+    const put = vi
+      .spyOn(api, 'put')
+      .mockImplementation(async (_url, config) => ({
+        data: { success: true, data: { ...data, config } },
+      }))
+    renderForm({
+      ...data,
+      config: { ...data.config, members: [] },
+      runtime: [],
+    })
+    await user.click(screen.getByRole('button', { name: 'Add from channels' }))
+    await user.click(await screen.findByRole('combobox', { name: 'Channel' }))
+    await user.click(await screen.findByRole('option', { name: 'GPU server' }))
+    await user.click(screen.getByRole('combobox', { name: 'Select models' }))
+    await user.click(
+      await screen.findByRole('option', { name: /qwen-responses/ })
+    )
+    await user.keyboard('{Escape}')
+    await user.click(
+      screen.getByRole('button', { name: 'Add selected models' })
+    )
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(screen.getByText('qwen-responses → qwen')).toBeVisible()
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith(
+        '/api/auto_pool/',
+        expect.objectContaining({
+          members: [
+            expect.objectContaining({
+              channel_model: 'qwen-responses',
+              actual_model: 'qwen',
+            }),
+          ],
+        })
+      )
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Save changes' })
+      ).toBeDisabled()
+    )
+    await user.clear(screen.getByLabelText('Weight'))
+    await user.type(screen.getByLabelText('Weight'), '200')
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() =>
+      expect(put).toHaveBeenLastCalledWith(
+        '/api/auto_pool/',
+        expect.objectContaining({
+          members: [
+            expect.objectContaining({
+              channel_model: 'qwen-responses',
+              actual_model: 'qwen',
+              weight: 200,
+            }),
+          ],
+        })
+      )
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Save changes' })
+      ).toBeDisabled()
+    )
+    await user.click(screen.getByRole('button', { name: 'Add from channels' }))
+    await user.click(await screen.findByRole('combobox', { name: 'Channel' }))
+    await user.click(await screen.findByRole('option', { name: 'GPU server' }))
+    expect(
+      within(screen.getByRole('dialog')).getByText('qwen-chat')
+    ).toBeVisible()
+    expect(
+      within(screen.getByRole('dialog')).queryByText('qwen-responses')
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Add selected models' })
+    ).toBeEnabled()
   })
 
   it('shows already pooled feedback instead of creating duplicate members', async () => {
