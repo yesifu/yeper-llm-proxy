@@ -19,7 +19,9 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/model_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -364,6 +366,173 @@ func TestAutoPoolChannelCatalogDatabaseMatrix(t *testing.T) {
 			require.NoError(t, db.Migrator().DropTable(&model.Channel{}))
 			modelManagementRequest(t, GetAutoPoolChannels, http.MethodGet, "/api/auto_pool/channels", nil, &response)
 			assert.False(t, response.Success)
+		})
+	}
+}
+
+func TestAutoPoolUserModelDiscoveryDatabaseMatrix(t *testing.T) {
+	withSelfUseModeDisabled(t)
+	previousGroups := setting.UserUsableGroups2JSONString()
+	previousAutoGroups := setting.AutoGroups2JsonString()
+	previousRatios := ratio_setting.GroupRatio2JSONString()
+	specialGroups := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup
+	previousSpecialGroups := specialGroups.ReadAll()
+	specialGroups.Clear()
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default","vip":"VIP","auto":"Auto"}`))
+	require.NoError(t, setting.UpdateAutoGroupsByJsonString(`["vip","default","private"]`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"vip":1,"private":1}`))
+	t.Cleanup(func() {
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(previousGroups))
+		require.NoError(t, setting.UpdateAutoGroupsByJsonString(previousAutoGroups))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousRatios))
+		specialGroups.Clear()
+		specialGroups.AddAll(previousSpecialGroups)
+	})
+
+	for _, dialect := range []struct{ kind, env string }{{"sqlite", ""}, {"mysql", "TEST_MYSQL_DSN"}, {"postgres", "TEST_POSTGRES_DSN"}} {
+		t.Run(dialect.kind, func(t *testing.T) {
+			if dialect.env != "" && os.Getenv(dialect.env) == "" {
+				t.Skip("set " + dialect.env + " to run this database")
+			}
+			db := modelManagementDB(t, dialect.kind, os.Getenv(dialect.env))
+			require.NoError(t, db.AutoMigrate(&model.SystemTask{}))
+			user := model.User{Username: "pool-catalog-user", Group: "default", Status: common.UserStatusEnabled}
+			require.NoError(t, db.Create(&user).Error)
+			channel := model.Channel{Name: "pool-catalog-channel", Type: constant.ChannelTypeOpenAI, Key: "private-catalog-key", Models: "catalog-actual-model", Group: "default", Status: common.ChannelStatusEnabled}
+			require.NoError(t, db.Create(&channel).Error)
+			pool, err := service.GetAutoPoolConfig()
+			require.NoError(t, err)
+			pool.Enabled = true
+			// Both unprobed, zero-weight paused members remain discoverable:
+			// creating a key must not depend on a node currently accepting work.
+			pool.Members = []service.AutoPoolMember{
+				{ID: "catalog-node", ChannelID: channel.Id, ActualModel: "catalog-actual-model", ResourceKey: "catalog-resource", MaxConcurrency: 1, State: "paused"},
+				{ID: "catalog-node-copy", ChannelID: channel.Id, ActualModel: "catalog-actual-model", ResourceKey: "catalog-resource", MaxConcurrency: 1, State: "paused"},
+			}
+			for _, tc := range []struct {
+				name, requestGroup, channelGroup, customSettings         string
+				disabledPool, emptyPool, disabledChannel, missingChannel bool
+				wantAlias                                                bool
+			}{
+				{name: "no pricing and paused unprobed members", requestGroup: "default", wantAlias: true},
+				{name: "all authorized groups", wantAlias: true},
+				{name: "automatic group expands authorized groups", requestGroup: "auto", wantAlias: true},
+				{name: "inaccessible channel group", channelGroup: "private"},
+				{name: "explicit unauthorized group", requestGroup: "private", channelGroup: "private"},
+				{name: "explicit group excludes other members", requestGroup: "vip"},
+				{name: "explicit authorized group", requestGroup: "vip", channelGroup: "vip", wantAlias: true},
+				{name: "disabled pool", disabledPool: true},
+				{name: "empty pool", emptyPool: true},
+				{name: "disabled channel", disabledChannel: true},
+				{name: "deleted channel", missingChannel: true},
+				{name: "supported scoped Responses route", customSettings: `{"advanced_custom":{"advanced_routes":[{"incoming_path":"/v1/responses","upstream_path":"/private-responses","models":["catalog-actual-model"]}]}}`, wantAlias: true},
+				{name: "unsupported custom endpoint", customSettings: `{"advanced_custom":{"advanced_routes":[{"incoming_path":"/v1/embeddings","upstream_path":"/embeddings"}]}}`},
+				{name: "custom route excludes member model", customSettings: `{"advanced_custom":{"advanced_routes":[{"incoming_path":"/v1/chat/completions","upstream_path":"/chat","models":["another-model"]}]}}`},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					configured := channel
+					if tc.channelGroup != "" {
+						configured.Group = tc.channelGroup
+					}
+					if tc.disabledChannel {
+						configured.Status = common.ChannelStatusManuallyDisabled
+					}
+					if tc.customSettings != "" {
+						configured.Type = constant.ChannelTypeAdvancedCustom
+						configured.OtherSettings = tc.customSettings
+					}
+					require.NoError(t, db.Save(&configured).Error)
+					require.NoError(t, configured.UpdateAbilities(db))
+					configuredPool := pool
+					configuredPool.Enabled = !tc.disabledPool
+					configuredPool.Members = append([]service.AutoPoolMember(nil), pool.Members...)
+					if tc.emptyPool {
+						configuredPool.Members = nil
+					}
+					if tc.missingChannel {
+						for i := range configuredPool.Members {
+							configuredPool.Members[i].ChannelID += 1000
+						}
+					}
+					encoded, err := common.Marshal(configuredPool)
+					require.NoError(t, err)
+					// Persist a stale member as can happen after channel edits or
+					// deletion, without relying on configuration-save validation.
+					require.NoError(t, model.UpdateOptionsBulk(map[string]string{service.AutoPoolOptionKey: string(encoded)}))
+					recorder := httptest.NewRecorder()
+					c, _ := gin.CreateTestContext(recorder)
+					c.Request = httptest.NewRequest(http.MethodGet, "/api/user/models?group="+tc.requestGroup, nil)
+					c.Set("id", user.Id)
+					GetUserModels(c)
+					models := decodeUserModelsResponse(t, recorder)
+					aliasCount := 0
+					for _, name := range models {
+						if name == service.AutoPoolModel {
+							aliasCount++
+						}
+					}
+					if tc.wantAlias {
+						assert.Equal(t, 1, aliasCount, "multiple eligible members advertise the virtual model only once")
+					} else {
+						assert.Zero(t, aliasCount)
+					}
+					assert.NotContains(t, recorder.Body.String(), channel.Key)
+				})
+			}
+
+			// API discovery is stricter than the key editor: price the actual
+			// model, honor the token's model permissions, and expose the alias
+			// only for supported client protocols.
+			require.NoError(t, db.Save(&channel).Error)
+			require.NoError(t, channel.UpdateAbilities(db))
+			encoded, err := common.Marshal(pool)
+			require.NoError(t, err)
+			require.NoError(t, model.UpdateOptionsBulk(map[string]string{service.AutoPoolOptionKey: string(encoded)}))
+			for _, tc := range []struct {
+				name                    string
+				priceActual, allowAlias bool
+				modelType               int
+				wantAlias               bool
+			}{
+				{"actual model unpriced", false, true, constant.ChannelTypeOpenAI, false},
+				{"actual model priced without alias price", true, true, constant.ChannelTypeOpenAI, true},
+				{"token excludes alias", true, false, constant.ChannelTypeOpenAI, false},
+				{"Anthropic protocol", true, true, constant.ChannelTypeAnthropic, false},
+				{"Gemini protocol", true, true, constant.ChannelTypeGemini, false},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					prices := "{}"
+					if tc.priceActual {
+						prices = `{"catalog-actual-model":0.001}`
+					}
+					require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(prices))
+					recorder := httptest.NewRecorder()
+					c, _ := gin.CreateTestContext(recorder)
+					c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+					c.Set("id", user.Id)
+					common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+					common.SetContextKey(c, constant.ContextKeyTokenModelLimitEnabled, true)
+					limits := map[string]bool{"catalog-actual-model": true}
+					if tc.allowAlias {
+						limits[service.AutoPoolModel] = true
+					}
+					common.SetContextKey(c, constant.ContextKeyTokenModelLimit, limits)
+					ListModels(c, tc.modelType)
+					require.Equal(t, http.StatusOK, recorder.Code)
+					if tc.wantAlias {
+						models := decodeListModelsPayload(t, recorder)
+						aliasCount := 0
+						for _, item := range models.Data {
+							if item.Id == service.AutoPoolModel {
+								aliasCount++
+							}
+						}
+						assert.Equal(t, 1, aliasCount)
+					} else {
+						assert.NotContains(t, recorder.Body.String(), service.AutoPoolModel)
+					}
+				})
+			}
 		})
 	}
 }

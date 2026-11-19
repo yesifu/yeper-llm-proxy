@@ -281,21 +281,7 @@ func ListModels(c *gin.Context, modelType int) {
 	// channel or have its own price. Actual member models provide pricing.
 	if modelType != constant.ChannelTypeAnthropic && modelType != constant.ChannelTypeGemini &&
 		(!modelLimitEnable || middleware.TokenModelLimitAllows(tokenModelLimit, service.AutoPoolModel)) {
-		pool, poolErr := service.GetAutoPoolConfig()
-		if poolErr == nil && pool.Enabled {
-			for _, member := range pool.Members {
-				channel, channelErr := model.CacheGetChannel(member.ChannelID)
-				if channelErr != nil || channel == nil || channel.Status != common.ChannelStatusEnabled || !service.AutoPoolChannelCompatible(channel) || !helper.HasModelBillingConfig(member.ActualModel) {
-					continue
-				}
-				if slices.ContainsFunc(ownerGroups, func(group string) bool { return slices.Contains(channel.GetGroups(), group) }) {
-					if !slices.Contains(userModelNames, service.AutoPoolModel) {
-						userModelNames = append(userModelNames, service.AutoPoolModel)
-					}
-					break
-				}
-			}
-		}
+		userModelNames = appendAutoPoolModel(userModelNames, ownerGroups, true)
 	}
 
 	ownerByModel := map[string]string{}

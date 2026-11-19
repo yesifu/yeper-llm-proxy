@@ -31,6 +31,37 @@ type autoPoolChannelOption struct {
 	IncompatibilityReason string                 `json:"incompatibility_reason"`
 }
 
+// appendAutoPoolModel exposes the virtual alias only through groups already
+// authorized by the caller. Console selectors include unpriced models; the
+// public model API additionally requires a billable underlying model.
+// Discovery is independent of transient health, capacity and pause state.
+func appendAutoPoolModel(models []string, groups []string, requirePrice bool) []string {
+	if len(groups) == 0 || slices.Contains(models, service.AutoPoolModel) {
+		return models
+	}
+	pool, err := service.GetAutoPoolConfig()
+	if err != nil || !pool.Enabled {
+		return models
+	}
+	for _, member := range pool.Members {
+		channel, err := model.CacheGetChannel(member.ChannelID)
+		if err != nil || channel == nil || channel.Status != common.ChannelStatusEnabled {
+			continue
+		}
+		if !slices.ContainsFunc(groups, func(group string) bool { return slices.Contains(channel.GetGroups(), group) }) {
+			continue
+		}
+		if _, _, err := service.PrepareAutoPoolProbeChannel(channel, member); err != nil {
+			continue
+		}
+		if requirePrice && !helper.HasModelBillingConfig(member.ActualModel) {
+			continue
+		}
+		return append(models, service.AutoPoolModel)
+	}
+	return models
+}
+
 func GetAutoPoolChannels(c *gin.Context) {
 	var channels []model.Channel
 	// Fetch only selection metadata. Credentials and upstream URLs are not
