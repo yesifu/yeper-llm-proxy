@@ -18,21 +18,18 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Plus, Settings2 } from 'lucide-react'
 import { useState } from 'react'
-import {
-  Controller,
-  FormProvider,
-  useFieldArray,
-  useForm,
-} from 'react-hook-form'
+import { useWatch, FormProvider, useFieldArray, useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Field, FieldLabel } from '@/components/ui/field'
-import { Input } from '@/components/ui/input'
-import { Switch } from '@/components/ui/switch'
+import { toIntlLocale } from '@/i18n/languages'
+import { formatNumber } from '@/lib/format'
+import { cn } from '@/lib/utils'
 
 import {
   getAutoPoolChannels,
@@ -44,11 +41,17 @@ import { createPoolMembers } from '../lib/channel-options'
 import { autoPoolSchema, type AutoPoolConfig } from '../lib/schema'
 import { ChannelPicker } from './channel-picker'
 import { MemberEditor } from './member-editor'
+import { MemberList } from './member-list'
+import { PoolOverview } from './pool-overview'
+import { PoolSettings } from './pool-settings'
 
 export function PoolForm(props: { data: AutoPoolData }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const client = useQueryClient()
   const [removing, setRemoving] = useState<number | null>(null)
+  const [editing, setEditing] = useState<number | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [adding, setAdding] = useState(false)
   const channels = useQuery({
     queryKey: ['auto-pool-channels'],
@@ -64,6 +67,7 @@ export function PoolForm(props: { data: AutoPoolData }) {
     name: 'members',
     keyName: 'formKey',
   })
+  const draftMembers = useWatch({ control: form.control, name: 'members' })
   const save = useMutation({
     mutationFn: saveAutoPool,
     onSuccess: (data) => {
@@ -74,134 +78,79 @@ export function PoolForm(props: { data: AutoPoolData }) {
   })
   const probe = useMutation({
     mutationFn: probeAutoPoolMember,
-    onSuccess: () => client.invalidateQueries({ queryKey: ['auto-pool'] }),
+    onSuccess: (result) => {
+      client.setQueryData<AutoPoolData>(
+        ['auto-pool'],
+        (previous) =>
+          previous && {
+            ...previous,
+            runtime: previous.runtime.map((row) =>
+              row.id === result.id ? result : row
+            ),
+          }
+      )
+    },
+    onSettled: () => client.invalidateQueries({ queryKey: ['auto-pool'] }),
   })
   const dirty = form.formState.isDirty
 
+  const savedAccepting = new Set(
+    props.data.config.members
+      .filter((member) => member.state === 'accepting')
+      .map((member) => member.id)
+  )
+  const submit = form.handleSubmit(
+    (config) => save.mutate(config),
+    (errors) => {
+      const memberIndex = draftMembers.findIndex(
+        (_, index) => errors.members?.[index]
+      )
+      if (memberIndex >= 0) setEditing(memberIndex)
+      else setSettingsOpen(true)
+    }
+  )
+
   return (
     <FormProvider {...form}>
-      <form
-        className='space-y-5'
-        onSubmit={form.handleSubmit((config) => save.mutate(config))}
-      >
-        <div className='text-muted-foreground space-y-1 text-sm'>
-          <p>
-            {t(
-              'Clients use llm-auto. Billing follows the selected actual model price.'
-            )}
-          </p>
-          <p>
-            {t(
-              'Choose configured channels and models to add them to the pool.'
-            )}
-          </p>
-          <p>
-            {t(
-              'Draining stops new requests. Wait for Safe to reclaim before stopping the upstream.'
-            )}
-          </p>
-        </div>
-        <fieldset disabled={save.isPending} className='space-y-5'>
-          <div className='flex flex-wrap gap-6'>
-            {(['enabled', 'health_enabled'] as const).map((key) => (
-              <Controller
-                key={key}
-                name={key}
-                control={form.control}
-                render={({ field }) => (
-                  <Field orientation='horizontal' className='w-auto'>
-                    <Switch
-                      id={key}
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                    />
-                    <FieldLabel htmlFor={key}>
-                      {key === 'enabled'
-                        ? t('Enable auto pool')
-                        : t('Require healthy members')}
-                    </FieldLabel>
-                  </Field>
-                )}
-              />
-            ))}
-          </div>
-          <div className='grid gap-4 sm:grid-cols-3'>
-            {(
-              [
-                {
-                  name: 'probe_interval_seconds',
-                  label: t('Probe interval (seconds)'),
-                },
-                {
-                  name: 'probe_timeout_seconds',
-                  label: t('Probe timeout (seconds)'),
-                },
-                { name: 'lease_seconds', label: t('Capacity lease (seconds)') },
-              ] as const
-            ).map((field) => (
-              <Field
-                key={field.name}
-                data-invalid={Boolean(form.formState.errors[field.name])}
+      <div className='space-y-5'>
+        <PoolOverview data={props.data} />
+        <fieldset disabled={save.isPending} className='min-w-0 space-y-3'>
+          <div className='flex flex-wrap items-center justify-between gap-3'>
+            <div className='flex items-center gap-2'>
+              <h3 className='text-base font-semibold'>{t('Pool members')}</h3>
+              <Badge variant='secondary' className='tabular-nums'>
+                {formatNumber(draftMembers.length, locale)}
+              </Badge>
+            </div>
+            <div className='flex flex-wrap gap-2'>
+              <Button
+                type='button'
+                variant='outline'
+                onClick={() => setSettingsOpen(true)}
               >
-                <FieldLabel htmlFor={field.name}>{field.label}</FieldLabel>
-                <Input
-                  type='number'
-                  id={field.name}
-                  aria-invalid={Boolean(form.formState.errors[field.name])}
-                  {...form.register(field.name, { valueAsNumber: true })}
-                />
-                {form.formState.errors[field.name] && (
-                  <p role='alert' className='text-destructive text-xs'>
-                    {t('Check this value')}
-                  </p>
-                )}
-              </Field>
-            ))}
+                <Settings2 aria-hidden='true' />
+                {t('Pool settings')}
+              </Button>
+              <Button type='button' onClick={() => setAdding(true)}>
+                <Plus aria-hidden='true' />
+                {t('Add from channels')}
+              </Button>
+            </div>
           </div>
-          <p className='text-muted-foreground text-sm'>
-            {t(
-              'New members must pass a probe before receiving traffic when health checks are required.'
-            )}
-          </p>
-          <p className='text-muted-foreground text-sm'>
-            {t(
-              'Probes run only for enabled pools and members accepting requests.'
-            )}
-          </p>
-          {members.fields.length === 0 && (
-            <p className='rounded-lg border border-dashed p-6 text-sm'>
-              {t('No pool members. Add an existing channel to get started.')}
-            </p>
-          )}
-          {members.fields.map((member, index) => (
-            <MemberEditor
-              key={member.formKey}
-              index={index}
-              channel={channels.data?.find(
-                (channel) => channel.id === member.channel_id
-              )}
-              catalogKnown={channels.isSuccess}
-              runtime={props.data.runtime.find((row) => row.id === member.id)}
-              probeDisabled={
-                dirty ||
-                probe.isPending ||
-                !props.data.config.enabled ||
-                !props.data.config.members.some(
-                  (saved) =>
-                    saved.id === member.id && saved.state === 'accepting'
-                )
-              }
-              onProbe={() => probe.mutate(member.id)}
-              onRemove={() => setRemoving(index)}
-            />
-          ))}
-          <Button
-            type='button'
-            variant='outline'
-            onClick={() => setAdding(true)}
-          >
-            {t('Add from channels')}
-          </Button>
+          <MemberList
+            members={draftMembers}
+            channels={channels.data}
+            catalogKnown={channels.isSuccess}
+            runtime={props.data.runtime}
+            probeDisabled={
+              dirty || probe.isPending || !props.data.config.enabled
+            }
+            probingID={probe.isPending ? probe.variables : undefined}
+            canProbeMember={(id) => savedAccepting.has(id)}
+            onProbe={(id) => probe.mutate(id)}
+            onEdit={setEditing}
+            onRemove={setRemoving}
+          />
         </fieldset>
         {save.isError && (
           <p role='alert' className='text-destructive text-sm'>
@@ -213,25 +162,55 @@ export function PoolForm(props: { data: AutoPoolData }) {
             {t('Probe failed. Check the channel configuration and try again.')}
           </p>
         )}
-        <div className='bg-background sticky bottom-0 flex flex-wrap items-center gap-3 border-t py-3'>
-          <Button type='submit' disabled={save.isPending || !dirty}>
-            {save.isPending ? t('Saving...') : t('Save changes')}
-          </Button>
+        <div
+          className={cn(
+            'bg-background flex flex-wrap items-center justify-end gap-2 border-t py-3',
+            dirty && 'sticky bottom-0 z-10'
+          )}
+        >
+          {dirty && (
+            <span
+              role='status'
+              className='text-muted-foreground me-auto flex items-center gap-2 text-xs'
+            >
+              <span
+                aria-hidden='true'
+                className='bg-warning size-2 shrink-0 rounded-full'
+              />
+              {t('Save changes before running a probe.')}
+            </span>
+          )}
           <Button
             type='button'
             variant='ghost'
             disabled={save.isPending || !dirty}
-            onClick={() => form.reset(props.data.config)}
+            onClick={() => {
+              form.reset(props.data.config)
+              save.reset()
+            }}
           >
-            {t('Reset')}
+            {t('Discard changes')}
           </Button>
-          {dirty && (
-            <span className='text-muted-foreground text-sm'>
-              {t('Save changes before running a probe.')}
-            </span>
-          )}
+          <Button
+            type='button'
+            disabled={save.isPending || !dirty}
+            onClick={() => void submit()}
+          >
+            {save.isPending ? t('Saving...') : t('Save changes')}
+          </Button>
         </div>
-      </form>
+      </div>
+      {settingsOpen && <PoolSettings onClose={() => setSettingsOpen(false)} />}
+      {editing !== null && draftMembers[editing] && (
+        <MemberEditor
+          key={draftMembers[editing].id}
+          index={editing}
+          channel={channels.data?.find(
+            (channel) => channel.id === draftMembers[editing].channel_id
+          )}
+          onClose={() => setEditing(null)}
+        />
+      )}
       {adding && (
         <ChannelPicker
           channels={channels.data ?? []}

@@ -162,9 +162,7 @@ describe('Auto pool editor', () => {
       runtime: [{ ...data.runtime[0], in_flight: -1 }],
     })
     expect(screen.getByRole('button', { name: 'Probe now' })).toBeDisabled()
-    expect(screen.getByText(/Active requests/)).toHaveTextContent(
-      'Active requests: -'
-    )
+    expect(screen.getByRole('row', { name: /qwen/ })).toHaveTextContent('- / 2')
     expect(screen.queryByText('Safe to reclaim')).not.toBeInTheDocument()
   })
   it('keeps pending edits and disables probes when a save is rejected', async () => {
@@ -173,15 +171,18 @@ describe('Auto pool editor', () => {
       data: { success: false, message: 'Invalid channel' },
     })
     renderForm()
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
     await user.clear(screen.getByLabelText('Weight'))
     await user.type(screen.getByLabelText('Weight'), '200')
+    await user.click(screen.getByRole('button', { name: 'Done' }))
     expect(screen.getByRole('button', { name: 'Probe now' })).toBeDisabled()
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Pool save failed'
     )
-    expect(screen.getByLabelText('Weight')).toHaveValue(200)
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    expect(screen.getByLabelText('Weight')).toHaveValue(200)
   })
 
   it('saves a drain state and displays resource reclamation readiness from the server', async () => {
@@ -194,7 +195,9 @@ describe('Auto pool editor', () => {
       runtime: [{ ...data.runtime[0], in_flight: 0, safe_to_reclaim: true }],
     })
     expect(screen.getByText('Safe to reclaim')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
     await user.selectOptions(screen.getByLabelText('Routing state'), 'draining')
+    await user.click(screen.getByRole('button', { name: 'Done' }))
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() =>
       expect(put).toHaveBeenCalledWith(
@@ -240,9 +243,10 @@ describe('Auto pool editor', () => {
     const user = userEvent.setup()
     const put = vi.spyOn(api, 'put')
     renderForm()
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
     await user.clear(screen.getByLabelText('Concurrency limit'))
     await user.type(screen.getByLabelText('Concurrency limit'), '-1')
-    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    await user.click(screen.getByRole('button', { name: 'Done' }))
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Check this value'
     )
@@ -250,6 +254,29 @@ describe('Auto pool editor', () => {
       'aria-invalid',
       'true'
     )
+    expect(put).not.toHaveBeenCalled()
+  })
+
+  it('reopens the invalid member even when it is hidden by a list filter at save time', async () => {
+    const user = userEvent.setup()
+    const put = vi.spyOn(api, 'put')
+    renderForm()
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    await user.click(screen.getByRole('button', { name: 'Advanced settings' }))
+    await user.clear(screen.getByLabelText('Shared resource key'))
+    await user.keyboard('{Escape}')
+    await user.type(screen.getByRole('searchbox'), 'nonexistent')
+    expect(screen.queryByRole('row', { name: /qwen/ })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    const dialog = within(
+      await screen.findByRole('dialog', { name: 'Edit member' })
+    )
+    expect(dialog.getByLabelText('Shared resource key')).toHaveAttribute(
+      'aria-invalid',
+      'true'
+    )
+    expect(dialog.getByRole('alert')).toBeVisible()
     expect(put).not.toHaveBeenCalled()
   })
 
@@ -293,7 +320,7 @@ describe('Auto pool editor', () => {
     await user.click(
       screen.getByRole('button', { name: 'Add selected models' })
     )
-    expect(screen.getAllByLabelText('Concurrency limit')).toHaveLength(4)
+    expect(screen.getAllByRole('button', { name: 'Edit' })).toHaveLength(4)
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => expect(put).toHaveBeenCalled())
     const saved = put.mock.calls[0][1] as AutoPoolData['config']
@@ -422,8 +449,10 @@ describe('Auto pool editor', () => {
         screen.getByRole('button', { name: 'Save changes' })
       ).toBeDisabled()
     )
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
     await user.clear(screen.getByLabelText('Weight'))
     await user.type(screen.getByLabelText('Weight'), '200')
+    await user.click(screen.getByRole('button', { name: 'Done' }))
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() =>
       expect(put).toHaveBeenLastCalledWith(
@@ -478,8 +507,10 @@ describe('Auto pool editor', () => {
     const user = userEvent.setup()
     vi.spyOn(api, 'get').mockRejectedValue(new Error('Catalog offline'))
     renderForm()
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
     await user.clear(screen.getByLabelText('Weight'))
     await user.type(screen.getByLabelText('Weight'), '250')
+    await user.click(screen.getByRole('button', { name: 'Done' }))
     await user.click(screen.getByRole('button', { name: 'Add from channels' }))
     expect(await screen.findByText('Could not load channels.')).toBeVisible()
     expect(
@@ -493,9 +524,10 @@ describe('Auto pool editor', () => {
       await screen.findByText('No channels configured. Add a channel first.')
     ).toBeVisible()
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
-    expect(screen.getByLabelText('Weight')).toHaveValue(250)
     expect(screen.getByText('qwen')).toBeVisible()
     expect(screen.getByText('Channel unavailable')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    expect(screen.getByLabelText('Weight')).toHaveValue(250)
   })
 
   it('prevents adding while catalog loads and restores focus when cancelled by keyboard', async () => {
@@ -536,10 +568,15 @@ describe('Auto pool editor', () => {
         ],
       },
     })
-    const limits = screen.getAllByLabelText('Concurrency limit')
-    await user.clear(limits[0])
-    await user.type(limits[0], '4')
-    expect(limits[1]).toHaveValue(4)
+    const first = within(screen.getByRole('row', { name: /qwen/ }))
+    await user.click(first.getByRole('button', { name: 'Edit' }))
+    await user.clear(screen.getByLabelText('Concurrency limit'))
+    await user.type(screen.getByLabelText('Concurrency limit'), '4')
+    await user.click(screen.getByRole('button', { name: 'Done' }))
+    const second = within(screen.getByRole('row', { name: /model-two/ }))
+    await user.click(second.getByRole('button', { name: 'Edit' }))
+    expect(screen.getByLabelText('Concurrency limit')).toHaveValue(4)
+    await user.click(screen.getByRole('button', { name: 'Done' }))
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() =>
       expect(put).toHaveBeenCalledWith(
@@ -592,6 +629,27 @@ describe('Auto pool editor', () => {
       screen.getByRole('button', { name: 'Add selected models' })
     ).toBeDisabled()
     expect(onAdd).not.toHaveBeenCalled()
+  })
+
+  it('keeps pool settings in the draft until saved and restores the saved values on reset', async () => {
+    const user = userEvent.setup()
+    const put = vi.spyOn(api, 'put')
+    renderForm()
+    const settings = screen.getByRole('button', { name: 'Pool settings' })
+    await user.click(settings)
+    const interval = screen.getByLabelText('Probe interval (seconds)')
+    await user.clear(interval)
+    await user.type(interval, '90')
+    await user.click(screen.getByRole('button', { name: 'Done' }))
+    expect(put).not.toHaveBeenCalled()
+    await user.click(settings)
+    expect(screen.getByLabelText('Probe interval (seconds)')).toHaveValue(90)
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(settings).toHaveFocus())
+    await user.click(screen.getByRole('button', { name: 'Discard changes' }))
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
+    await user.click(settings)
+    expect(screen.getByLabelText('Probe interval (seconds)')).toHaveValue(60)
   })
 
   it('treats a failed GET response as an error rather than empty configuration', async () => {

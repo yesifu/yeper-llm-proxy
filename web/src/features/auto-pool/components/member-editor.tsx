@@ -16,133 +16,93 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useState } from 'react'
 import { Controller, useFormContext, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 
-import { Badge } from '@/components/ui/badge'
+import { Dialog } from '@/components/dialog'
+import { Accordion } from '@/components/ui/accordion'
 import { Button } from '@/components/ui/button'
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible'
-import { Field, FieldLabel } from '@/components/ui/field'
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
-import { Switch } from '@/components/ui/switch'
+import { SettingsAccordion } from '@/features/system-settings/components/settings-accordion'
+import { SettingsSwitchField } from '@/features/system-settings/components/settings-form-layout'
 import { toIntlLocale } from '@/i18n/languages'
 import { formatNumber } from '@/lib/format'
 
-import type { MemberRuntime, PoolChannel } from '../api'
-import { channelUnavailableMessage } from '../lib/channel-options'
+import type { PoolChannel } from '../api'
 import type { AutoPoolConfig } from '../lib/schema'
 
 type Props = {
   index: number
   channel?: PoolChannel
-  catalogKnown: boolean
-  runtime?: MemberRuntime
-  probeDisabled: boolean
-  onProbe: () => void
-  onRemove: () => void
+  onClose: () => void
 }
 
 export function MemberEditor(props: Props) {
   const { t, i18n } = useTranslation()
   const form = useFormContext<AutoPoolConfig>()
   const base = `members.${props.index}` as const
-  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
-  const labels = {
-    unknown: t('Not checked'),
-    healthy: t('Healthy'),
-    unhealthy: t('Unhealthy'),
-    stale: t('Health check expired'),
-  }
   const member = useWatch({ control: form.control, name: base })
+  const errors = form.formState.errors.members?.[props.index]
+  const [advanced, setAdvanced] = useState(false)
+  const showAdvanced =
+    advanced || Boolean(errors?.resource_key || errors?.context_window)
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
+  const channelName =
+    props.channel?.name ??
+    t('Channel {{id}}', { id: formatNumber(member.channel_id, locale) })
+  const modelName =
+    member.channel_model && member.channel_model !== member.actual_model
+      ? `${member.channel_model} → ${member.actual_model}`
+      : member.actual_model
   const fields = [
-    { name: 'weight', label: t('Weight'), type: 'number' },
-    { name: 'max_concurrency', label: t('Concurrency limit'), type: 'number' },
+    { name: 'weight', label: t('Weight') },
+    { name: 'max_concurrency', label: t('Concurrency limit') },
   ] as const
 
   return (
-    <fieldset className='min-w-0 space-y-4 rounded-lg border p-4'>
-      <legend className='max-w-full px-2 font-medium break-all'>
-        {props.channel?.name ??
-          t('Channel {{id}}', { id: formatNumber(member.channel_id, locale) })}
-      </legend>
-      <p className='font-mono text-sm break-all'>
-        {member.channel_model && member.channel_model !== member.actual_model
-          ? `${member.channel_model} → ${member.actual_model}`
-          : member.actual_model}
-      </p>
-      {props.catalogKnown && !props.channel && (
-        <p className='text-destructive text-sm'>{t('Channel unavailable')}</p>
-      )}
-      {props.channel && !props.channel.compatible && (
-        <p className='text-destructive text-sm'>
-          {channelUnavailableMessage(props.channel, t)}
-        </p>
-      )}
-      <div className='flex flex-wrap items-center gap-2' aria-live='polite'>
-        <Badge
-          variant={
-            props.runtime?.health === 'healthy' ? 'secondary' : 'outline'
-          }
-        >
-          {labels[props.runtime?.health ?? 'unknown']}
-        </Badge>
-        <span className='text-muted-foreground text-sm'>
-          {t('Active requests')}:{' '}
-          {formatNumber(
-            props.runtime && props.runtime.in_flight >= 0
-              ? props.runtime.in_flight
-              : undefined,
-            locale
-          )}
-        </span>
-        {props.runtime && props.runtime.last_checked > 0 && (
-          <span className='text-muted-foreground text-sm'>
-            {t('Latency')}: {formatNumber(props.runtime.latency_ms, locale)}{' '}
-            {t('ms')}
-          </span>
-        )}
-        {props.runtime?.safe_to_reclaim && (
-          <Badge variant='secondary'>{t('Safe to reclaim')}</Badge>
-        )}
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) props.onClose()
+      }}
+      title={t('Edit member')}
+      description={`${channelName} · ${modelName}`}
+      descriptionClassName='break-all'
+      bodyClassName='space-y-5'
+      footer={
         <Button
           type='button'
-          variant='outline'
-          size='sm'
-          disabled={props.probeDisabled}
-          onClick={props.onProbe}
+          onClick={async () => {
+            if (await form.trigger(base, { shouldFocus: true })) props.onClose()
+          }}
         >
-          {t('Probe now')}
+          {t('Done')}
         </Button>
-        <Button
-          type='button'
-          variant='ghost'
-          size='sm'
-          onClick={props.onRemove}
-        >
-          {t('Remove')}
-        </Button>
-      </div>
-      {props.runtime?.last_error && (
-        <p className='text-destructive text-sm break-all'>
-          {t(props.runtime.last_error)}
-        </p>
-      )}
-      <div className='grid gap-4 sm:grid-cols-3'>
+      }
+    >
+      <FieldGroup className='grid gap-4 sm:grid-cols-2'>
         {fields.map((field) => {
           const name = `${base}.${field.name}` as const
-          const error = form.getFieldState(name, form.formState).error
+          const invalid = Boolean(errors?.[field.name])
           return (
-            <Field key={field.name} data-invalid={Boolean(error)}>
+            <Field key={name} data-invalid={invalid}>
               <FieldLabel htmlFor={name}>{field.label}</FieldLabel>
               <Input
                 id={name}
-                type={field.type}
-                aria-invalid={Boolean(error)}
+                type='number'
+                aria-invalid={invalid}
+                aria-describedby={invalid ? `${name}-error` : undefined}
                 {...form.register(name, {
                   valueAsNumber: true,
                   onChange: (event) => {
@@ -156,22 +116,22 @@ export function MemberEditor(props: Props) {
                         form.setValue(
                           `members.${index}.max_concurrency`,
                           value,
-                          { shouldDirty: true, shouldValidate: true }
+                          { shouldDirty: true }
                         )
                       }
                     })
                   },
                 })}
               />
-              {error && (
-                <p role='alert' className='text-destructive text-xs'>
+              {invalid && (
+                <FieldError id={`${name}-error`}>
                   {t('Check this value')}
-                </p>
+                </FieldError>
               )}
             </Field>
           )
         })}
-        <Field>
+        <Field className='sm:col-span-2'>
           <FieldLabel htmlFor={`${base}.state`}>
             {t('Routing state')}
           </FieldLabel>
@@ -189,57 +149,60 @@ export function MemberEditor(props: Props) {
               {t('Paused')}
             </NativeSelectOption>
           </NativeSelect>
+          <FieldDescription className='text-xs'>
+            {t(
+              'Draining stops new requests. Wait for Safe to reclaim before stopping the upstream.'
+            )}
+          </FieldDescription>
         </Field>
-      </div>
-      <div className='flex flex-wrap gap-6'>
-        {(['supports_tools', 'supports_vision'] as const).map((key) => (
-          <Controller
-            key={key}
-            name={`${base}.${key}`}
-            control={form.control}
-            render={({ field }) => (
-              <Field orientation='horizontal' className='w-auto'>
-                <Switch
-                  id={`${base}.${key}`}
+      </FieldGroup>
+      <FieldSet className='gap-2'>
+        <FieldLegend variant='label'>{t('Capabilities')}</FieldLegend>
+        <FieldGroup className='grid gap-x-6 gap-y-0 rounded-lg border px-3 sm:grid-cols-2'>
+          {(['supports_tools', 'supports_vision'] as const).map((key) => (
+            <Controller
+              key={key}
+              name={`${base}.${key}`}
+              control={form.control}
+              render={({ field }) => (
+                <SettingsSwitchField
+                  controlId={field.name}
                   checked={field.value}
                   onCheckedChange={field.onChange}
+                  label={
+                    key === 'supports_tools' ? t('Tool calling') : t('Vision')
+                  }
                 />
-                <FieldLabel htmlFor={`${base}.${key}`}>
-                  {key === 'supports_tools' ? t('Tool calling') : t('Vision')}
-                </FieldLabel>
-              </Field>
-            )}
-          />
-        ))}
-      </div>
-      <p className='text-muted-foreground text-xs'>
-        {t(
-          'Capabilities are declared manually. Enable only those supported by this model.'
-        )}{' '}
-        {t('Tool requests only use members with Tool calling enabled.')}
-      </p>
-      <Collapsible>
-        <CollapsibleTrigger
-          render={<Button type='button' variant='ghost' size='sm' />}
-        >
-          {t('Advanced settings')}
-        </CollapsibleTrigger>
-        <CollapsibleContent className='space-y-3 pt-3'>
-          <div className='grid gap-4 sm:grid-cols-2'>
-            <Field
-              data-invalid={Boolean(
-                form.getFieldState(`${base}.resource_key`, form.formState).error
               )}
-            >
+            />
+          ))}
+        </FieldGroup>
+        <FieldDescription className='text-xs'>
+          {t(
+            'Capabilities are declared manually. Enable only those supported by this model.'
+          )}{' '}
+          {t('Tool requests only use members with Tool calling enabled.')}
+        </FieldDescription>
+      </FieldSet>
+      <Accordion
+        value={showAdvanced ? ['advanced'] : []}
+        onValueChange={(value) => setAdvanced(value.includes('advanced'))}
+        className='border-t pt-1'
+      >
+        <SettingsAccordion value='advanced' title={t('Advanced settings')}>
+          <FieldGroup className='grid gap-4 sm:grid-cols-2'>
+            <Field data-invalid={Boolean(errors?.resource_key)}>
               <FieldLabel htmlFor={`${base}.resource_key`}>
                 {t('Shared resource key')}
               </FieldLabel>
               <Input
                 id={`${base}.resource_key`}
-                aria-invalid={Boolean(
-                  form.getFieldState(`${base}.resource_key`, form.formState)
-                    .error
-                )}
+                aria-invalid={Boolean(errors?.resource_key)}
+                aria-describedby={
+                  errors?.resource_key
+                    ? `${base}.resource_key-error`
+                    : undefined
+                }
                 {...form.register(`${base}.resource_key`, {
                   onChange: (event) => {
                     const shared = form
@@ -259,46 +222,41 @@ export function MemberEditor(props: Props) {
                   },
                 })}
               />
-              {form.getFieldState(`${base}.resource_key`, form.formState)
-                .error && (
-                <p role='alert' className='text-destructive text-xs'>
+              {errors?.resource_key && (
+                <FieldError id={`${base}.resource_key-error`}>
                   {t('Check this value')}
-                </p>
+                </FieldError>
               )}
+              <FieldDescription className='text-xs'>
+                {t('Sharing a resource also shares its concurrency limit.')}
+              </FieldDescription>
             </Field>
-            <Field
-              data-invalid={Boolean(
-                form.getFieldState(`${base}.context_window`, form.formState)
-                  .error
-              )}
-            >
+            <Field data-invalid={Boolean(errors?.context_window)}>
               <FieldLabel htmlFor={`${base}.context_window`}>
                 {t('Context limit (0 = unlimited)')}
               </FieldLabel>
               <Input
                 id={`${base}.context_window`}
                 type='number'
-                aria-invalid={Boolean(
-                  form.getFieldState(`${base}.context_window`, form.formState)
-                    .error
-                )}
+                aria-invalid={Boolean(errors?.context_window)}
+                aria-describedby={
+                  errors?.context_window
+                    ? `${base}.context_window-error`
+                    : undefined
+                }
                 {...form.register(`${base}.context_window`, {
                   valueAsNumber: true,
                 })}
               />
-              {form.getFieldState(`${base}.context_window`, form.formState)
-                .error && (
-                <p role='alert' className='text-destructive text-xs'>
+              {errors?.context_window && (
+                <FieldError id={`${base}.context_window-error`}>
                   {t('Check this value')}
-                </p>
+                </FieldError>
               )}
             </Field>
-          </div>
-          <p className='text-muted-foreground text-xs'>
-            {t('Sharing a resource also shares its concurrency limit.')}
-          </p>
-        </CollapsibleContent>
-      </Collapsible>
-    </fieldset>
+          </FieldGroup>
+        </SettingsAccordion>
+      </Accordion>
+    </Dialog>
   )
 }
