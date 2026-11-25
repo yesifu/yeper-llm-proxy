@@ -54,9 +54,94 @@ const filters = {
   time_granularity: 'hour' as const,
 }
 
+function expectRates(
+  table: HTMLElement,
+  rowName: RegExp,
+  rpm: string,
+  tpm: string
+) {
+  const query = within(table)
+  const headers = query.getAllByRole('columnheader')
+  const cells = within(query.getByRole('row', { name: rowName })).getAllByRole(
+    'cell'
+  )
+  for (const [name, expected] of [
+    ['Average RPM', rpm],
+    ['Average TPM', tpm],
+  ]) {
+    const column = headers.indexOf(query.getByRole('columnheader', { name }))
+    expect(cells[column].textContent).toBe(expected)
+  }
+}
+
+function expectSummaryRates(rpm: string, tpm: string) {
+  const requests = screen.getByRole('group', { name: 'Average RPM' })
+  const tokens = screen.getByRole('group', { name: 'Average TPM' })
+  expect(within(requests).getByText(rpm)).toBeVisible()
+  expect(within(tokens).getByText(tpm)).toBeVisible()
+}
+
+it('uses the full selected window for each channel and its model rates', async () => {
+  const user = userEvent.setup()
+  const data = [
+    { ...sample, count: 120, token_used: 6000 },
+    { ...sample, model_name: 'model-c', count: 60, token_used: 2400 },
+    { ...sample, channel_id: 55, count: 30, token_used: 120 },
+  ]
+  const view = render(
+    <ChannelAnalytics
+      rows={data}
+      filters={filters}
+      periodMinutes={120}
+      sensitiveVisible
+    />
+  )
+  const table = screen.getByRole('table', { name: 'Channel comparison' })
+  expectSummaryRates('1.75', '71')
+  expectRates(table, /East · #42/, '1.5', '70')
+  expectRates(table, /East · #55/, '0.25', '1')
+
+  await user.click(within(table).getByRole('button', { name: 'East · #42' }))
+  const breakdown = screen.getByRole('table', { name: 'Model breakdown' })
+  expectSummaryRates('1.5', '70')
+  expectRates(breakdown, /model-a/, '1', '50')
+  expectRates(breakdown, /model-c/, '0.5', '20')
+  view.rerender(
+    <ChannelAnalytics
+      rows={data}
+      filters={{ ...filters, end_timestamp: new Date(3600_000) }}
+      periodMinutes={60}
+      sensitiveVisible
+    />
+  )
+  expectSummaryRates('3', '140')
+  expectRates(breakdown, /model-a/, '2', '100')
+})
+
+it('shows unavailable rates when the selected range has zero duration', () => {
+  render(
+    <ChannelAnalytics
+      rows={rows}
+      filters={{ ...filters, start_timestamp: filters.end_timestamp }}
+      periodMinutes={0}
+      sensitiveVisible
+    />
+  )
+  const table = screen.getByRole('table', { name: 'Channel comparison' })
+  expectSummaryRates('—', '—')
+  expectRates(table, /East · #42/, '—', '—')
+})
+
 it('ranks zero-cost channels by requests by default and reorders them by tokens', async () => {
   const user = userEvent.setup()
-  render(<ChannelAnalytics rows={rows} filters={filters} sensitiveVisible />)
+  render(
+    <ChannelAnalytics
+      rows={rows}
+      filters={filters}
+      periodMinutes={120}
+      sensitiveVisible
+    />
+  )
   const table = within(
     screen.getByRole('table', { name: 'Channel comparison' })
   )
@@ -72,7 +157,14 @@ it('ranks zero-cost channels by requests by default and reorders them by tokens'
 })
 it('drills into a single channel despite shared display names and can reset the scope with the keyboard', async () => {
   const user = userEvent.setup()
-  render(<ChannelAnalytics rows={rows} filters={filters} sensitiveVisible />)
+  render(
+    <ChannelAnalytics
+      rows={rows}
+      filters={filters}
+      periodMinutes={120}
+      sensitiveVisible
+    />
+  )
   await user.click(screen.getByRole('button', { name: 'East · #55' }))
   const table = within(screen.getByRole('table', { name: 'Model breakdown' }))
   expect(table.getByText('model-b')).toBeVisible()
@@ -87,10 +179,20 @@ it('drills into a single channel despite shared display names and can reset the 
 it('masks names and channel IDs while retaining separate selectable channels', async () => {
   const user = userEvent.setup()
   const view = render(
-    <ChannelAnalytics rows={rows} filters={filters} sensitiveVisible />
+    <ChannelAnalytics
+      rows={rows}
+      filters={filters}
+      periodMinutes={120}
+      sensitiveVisible
+    />
   )
   view.rerender(
-    <ChannelAnalytics rows={rows} filters={filters} sensitiveVisible={false} />
+    <ChannelAnalytics
+      rows={rows}
+      filters={filters}
+      periodMinutes={120}
+      sensitiveVisible={false}
+    />
   )
   const table = within(
     screen.getByRole('table', { name: 'Channel comparison' })

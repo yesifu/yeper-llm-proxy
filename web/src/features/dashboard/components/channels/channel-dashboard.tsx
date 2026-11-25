@@ -76,6 +76,7 @@ export function ChannelDashboard(props: ChannelDashboardProps) {
     <ChannelAnalytics
       rows={usage.data}
       filters={props.filters}
+      periodMinutes={(params.end_timestamp - params.start_timestamp) / 60}
       sensitiveVisible={props.sensitiveVisible}
     />
   )

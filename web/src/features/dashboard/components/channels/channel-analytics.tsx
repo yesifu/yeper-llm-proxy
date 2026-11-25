@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Activity, Layers, Wallet } from 'lucide-react'
+import { Activity, Gauge, Layers, Wallet, Zap } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -29,14 +29,12 @@ import {
   type ChannelMetric,
   type ChannelUsageGroup,
 } from '@/features/dashboard/lib/channel-analytics'
-import { getDefaultDays } from '@/features/dashboard/lib/filters'
 import type {
   ChannelUsageRow,
   DashboardFilters,
 } from '@/features/dashboard/types'
 import { toIntlLocale } from '@/i18n/languages'
 import { formatNumber, formatQuota } from '@/lib/format'
-import { computeTimeRange } from '@/lib/time'
 
 import { ChannelComparison } from './channel-comparison'
 import { ChannelTrend } from './channel-trend'
@@ -44,6 +42,7 @@ import { ChannelTrend } from './channel-trend'
 export function ChannelAnalytics(props: {
   rows: ChannelUsageRow[]
   filters: DashboardFilters
+  periodMinutes: number
   sensitiveVisible: boolean
 }) {
   const { t, i18n } = useTranslation()
@@ -118,18 +117,32 @@ export function ChannelAnalytics(props: {
     return points
   }, [summary.timeline])
   const { totals } = summary
-  const timeRange = computeTimeRange(
-    getDefaultDays(filters.time_granularity),
-    filters.start_timestamp,
-    filters.end_timestamp
-  )
-  const minutes = (timeRange.end_timestamp - timeRange.start_timestamp) / 60
   const rate = (amount: number) =>
-    minutes > 0 ? formatNumber(amount / minutes, locale) : '—'
+    props.periodMinutes > 0
+      ? formatNumber(amount / props.periodMinutes, locale)
+      : '—'
   const metrics = [
     { key: 'count', label: t('Requests') },
     { key: 'token_used', label: t('Tokens') },
     { key: 'quota', label: t('Quota') },
+  ] as const
+  const rateCards = [
+    {
+      key: 'rpm',
+      title: t('Average RPM'),
+      amount: totals.count,
+      unit: t('Requests per minute'),
+      icon: Gauge,
+      tone: 'chart-2',
+    },
+    {
+      key: 'tpm',
+      title: t('Average TPM'),
+      amount: totals.token_used,
+      unit: t('Tokens per minute'),
+      icon: Zap,
+      tone: 'warning',
+    },
   ] as const
   return (
     <div className='grid min-w-0 gap-3 sm:gap-4'>
@@ -154,25 +167,25 @@ export function ChannelAnalytics(props: {
           </TabsList>
         </Tabs>
       </div>
-      <div className='grid min-w-0 gap-2 sm:grid-cols-3 sm:gap-3'>
-        <div className='bg-card rounded-xl border p-3 sm:p-4'>
+      <div className='grid min-w-0 grid-cols-2 gap-2 sm:gap-3 md:grid-cols-6 xl:grid-cols-5'>
+        <div className='bg-card min-w-0 rounded-xl border p-3 sm:p-4 md:col-span-2 xl:col-span-1'>
           <StatCard
             compactMobile
             title={t('Requests')}
             value={formatNumber(totals.count, locale)}
-            description={`${t('Average RPM')} · ${rate(totals.count)}`}
+            description={`${t('Channels')} · ${formatNumber(summary.channels, locale)}`}
             icon={Activity}
             tone='accent-1'
             sparkline={sparklines.map((v) => v.count)}
             sparklineVariant='line'
           />
         </div>
-        <div className='bg-card rounded-xl border p-3 sm:p-4'>
+        <div className='bg-card min-w-0 rounded-xl border p-3 sm:p-4 md:col-span-2 xl:col-span-1'>
           <StatCard
             compactMobile
             title={t('Total Tokens')}
             value={formatNumber(totals.token_used, locale)}
-            description={`${t('Average TPM')} · ${rate(totals.token_used)}`}
+            description={`${t('Models')} · ${formatNumber(summary.models, locale)}`}
             icon={Layers}
             tone='accent-2'
             details={[
@@ -187,18 +200,35 @@ export function ChannelAnalytics(props: {
             ]}
           />
         </div>
-        <div className='bg-card rounded-xl border p-3 sm:p-4'>
+        <div className='bg-card col-span-2 min-w-0 rounded-xl border p-3 sm:p-4 xl:col-span-1'>
           <StatCard
             compactMobile
             title={t('Total Quota')}
             value={formatQuota(totals.quota)}
-            description={`${t('Channels')} · ${formatNumber(summary.channels, locale)} · ${t('Models')} · ${formatNumber(summary.models, locale)}`}
+            description={t('Total consumed quota')}
             icon={Wallet}
             tone='accent-3'
             sparkline={sparklines.map((v) => v.quota)}
             sparklineVariant='line'
           />
         </div>
+        {rateCards.map((item) => (
+          <div
+            key={item.key}
+            role='group'
+            aria-label={item.title}
+            className='bg-card min-w-0 rounded-xl border p-3 sm:p-4 md:col-span-3 xl:col-span-1'
+          >
+            <StatCard
+              compactMobile
+              title={item.title}
+              value={rate(item.amount)}
+              description={item.unit}
+              icon={item.icon}
+              iconTone={item.tone}
+            />
+          </div>
+        ))}
       </div>
       <PanelWrapper
         title={t('Channel usage trend')}
@@ -222,6 +252,7 @@ export function ChannelAnalytics(props: {
         metric={metric}
         total={totals[metric]}
         label={label}
+        rate={rate}
         byModel={byModel}
         onSelect={setScope}
       />

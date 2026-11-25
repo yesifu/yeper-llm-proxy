@@ -38,6 +38,7 @@ export function ChannelComparison(props: {
   metric: ChannelMetric
   total: number
   label: (group: ChannelUsageGroup) => string
+  rate: (amount: number) => string
   byModel: boolean
   onSelect: (key: string) => void
 }) {
@@ -88,6 +89,8 @@ export function ChannelComparison(props: {
       [
         { key: 'count', header: t('Requests') },
         { key: 'token_used', header: t('Tokens') },
+        { key: 'rpm', header: t('Average RPM') },
+        { key: 'tpm', header: t('Average TPM') },
         { key: 'quota', header: t('Quota') },
         { key: 'cache_read_tokens', header: t('Cache Read') },
         { key: 'cache_creation_tokens', header: t('Cache Write') },
@@ -97,10 +100,12 @@ export function ChannelComparison(props: {
       header,
       className: 'text-right',
       cellClassName: 'text-right tabular-nums',
-      cell: (group: ChannelUsageGroup) =>
-        key === 'quota'
-          ? formatQuota(group.quota)
-          : formatNumber(group[key], locale),
+      cell: (group: ChannelUsageGroup) => {
+        if (key === 'rpm') return props.rate(group.count)
+        if (key === 'tpm') return props.rate(group.token_used)
+        if (key === 'quota') return formatQuota(group.quota)
+        return formatNumber(group[key], locale)
+      },
     })),
   ]
   return (
@@ -115,7 +120,7 @@ export function ChannelComparison(props: {
     >
       <StaticDataTable
         className='max-h-[32rem] overflow-auto rounded-none border-0'
-        tableClassName='min-w-[48rem]'
+        tableClassName='min-w-[60rem]'
         tableProps={{ 'aria-label': tableTitle }}
         data={props.ranked}
         columns={columns}
