@@ -48,6 +48,8 @@ import {
 } from './lib'
 import {
   type DashboardSectionId,
+  canViewDashboardSection,
+  getDashboardSectionMeta,
   DASHBOARD_DEFAULT_SECTION,
   DASHBOARD_SECTION_IDS,
 } from './section-registry'
@@ -181,20 +183,11 @@ function PerformanceOverviewFallback() {
   )
 }
 
-const SECTION_META: Record<DashboardSectionId, { titleKey: string }> = {
-  overview: {
-    titleKey: 'Overview',
-  },
-  models: {
-    titleKey: 'Model Call Analytics',
-  },
-  flow: {
-    titleKey: 'Flow',
-  },
-  users: {
-    titleKey: 'User Analytics',
-  },
-}
+const LazyChannelDashboard = lazy(() =>
+  import('./components/channels/channel-dashboard').then((m) => ({
+    default: m.ChannelDashboard,
+  }))
+)
 
 export function Dashboard() {
   const { t } = useTranslation()
@@ -221,7 +214,7 @@ export function Dashboard() {
       }
     }
   )
-  const [flowSensitiveVisible, setFlowSensitiveVisible] = useState(true)
+  const [sensitiveVisible, setSensitiveVisible] = useState(true)
 
   const handleFilterChange = useCallback((filters: DashboardFilters) => {
     setModelFilters(filters)
@@ -248,12 +241,13 @@ export function Dashboard() {
     []
   )
 
-  const meta = SECTION_META[activeSection] ?? SECTION_META.overview
+  const meta = getDashboardSectionMeta(activeSection)
   const isAdmin = Boolean(userRole && userRole >= ROLE.ADMIN)
   const visibleSections = useMemo(
     () =>
       DASHBOARD_SECTION_IDS.filter(
-        (section) => section !== 'overview' && (section !== 'users' || isAdmin)
+        (section) =>
+          section !== 'overview' && canViewDashboardSection(section, isAdmin)
       ),
     [isAdmin]
   )
@@ -283,8 +277,8 @@ export function Dashboard() {
         />
       </>
     ) : null
-  const flowActions =
-    activeSection === 'flow' ? (
+  const channelOrFlowActions =
+    activeSection === 'flow' || activeSection === 'channels' ? (
       <>
         <Tooltip>
           <TooltipTrigger
@@ -292,9 +286,9 @@ export function Dashboard() {
               <Button
                 variant='ghost'
                 size='icon'
-                onClick={() => setFlowSensitiveVisible((prev) => !prev)}
+                onClick={() => setSensitiveVisible((prev) => !prev)}
                 aria-label={
-                  flowSensitiveVisible
+                  sensitiveVisible
                     ? t('Hide sensitive data')
                     : t('Show sensitive data')
                 }
@@ -302,10 +296,10 @@ export function Dashboard() {
               />
             }
           >
-            {flowSensitiveVisible ? <Eye /> : <EyeOff />}
+            {sensitiveVisible ? <Eye /> : <EyeOff />}
           </TooltipTrigger>
           <TooltipContent>
-            {flowSensitiveVisible
+            {sensitiveVisible
               ? t('Hide sensitive data')
               : t('Show sensitive data')}
           </TooltipContent>
@@ -315,12 +309,20 @@ export function Dashboard() {
           currentFilters={modelFilters}
           onFilterChange={handleFilterChange}
           onReset={handleResetFilters}
-          titleKey='Flow Filters'
-          descriptionKey='Filter the traffic flow view by time range and user.'
+          titleKey={
+            activeSection === 'channels'
+              ? 'Channel Analytics Filters'
+              : 'Flow Filters'
+          }
+          descriptionKey={
+            activeSection === 'channels'
+              ? 'Filter channel usage by time range and user.'
+              : 'Filter the traffic flow view by time range and user.'
+          }
         />
       </>
     ) : null
-  const sectionActions = modelActions ?? flowActions
+  const sectionActions = modelActions ?? channelOrFlowActions
 
   if (activeSection === 'overview') {
     return <OverviewDashboard />
@@ -337,7 +339,7 @@ export function Dashboard() {
                 <TabsList className='max-w-full flex-wrap justify-start group-data-horizontal/tabs:h-auto'>
                   {visibleSections.map((section) => (
                     <TabsTrigger key={section} value={section}>
-                      {t(SECTION_META[section].titleKey)}
+                      {t(getDashboardSectionMeta(section).titleKey)}
                     </TabsTrigger>
                   ))}
                 </TabsList>
@@ -396,7 +398,17 @@ export function Dashboard() {
               </FadeIn>
             </>
           )}
-          {activeSection === 'users' && (
+          {activeSection === 'channels' && isAdmin && (
+            <FadeIn>
+              <Suspense fallback={<ModelChartsFallback />}>
+                <LazyChannelDashboard
+                  filters={modelFilters}
+                  sensitiveVisible={sensitiveVisible}
+                />
+              </Suspense>
+            </FadeIn>
+          )}
+          {activeSection === 'users' && isAdmin && (
             <FadeIn>
               <Suspense fallback={<ModelChartsFallback />}>
                 <LazyUserCharts
@@ -411,7 +423,7 @@ export function Dashboard() {
               <Suspense fallback={<ModelChartsFallback />}>
                 <LazyFlowCharts
                   filters={modelFilters}
-                  sensitiveVisible={flowSensitiveVisible}
+                  sensitiveVisible={sensitiveVisible}
                 />
               </Suspense>
             </FadeIn>

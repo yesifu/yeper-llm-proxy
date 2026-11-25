@@ -42,6 +42,39 @@ type QuotaDataLogParams struct {
 	NodeName            string
 }
 
+// ChannelQuotaData is one hourly model usage bucket for a channel.
+type ChannelQuotaData struct {
+	ChannelID           int    `json:"channel_id"`
+	ChannelName         string `json:"channel_name"`
+	ModelName           string `json:"model_name"`
+	CreatedAt           int64  `json:"created_at"`
+	Count               int64  `json:"count"`
+	TokenUsed           int64  `json:"token_used"`
+	Quota               int64  `json:"quota"`
+	CacheReadTokens     int64  `json:"cache_read_tokens"`
+	CacheCreationTokens int64  `json:"cache_creation_tokens"`
+}
+
+func GetChannelQuotaData(startTimestamp, endTimestamp int64, username string) ([]ChannelQuotaData, error) {
+	// Aggregate before looking up names. A missing or deleted channel must
+	// still contribute its historical usage to the dashboard.
+	buckets := DB.Table("quota_data").
+		Select(`channel_id, model_name, created_at, SUM(count) AS count, SUM(token_used) AS token_used,
+			SUM(quota) AS quota, SUM(cache_read_tokens) AS cache_read_tokens, SUM(cache_creation_tokens) AS cache_creation_tokens`).
+		Where("created_at >= ? AND created_at <= ?", startTimestamp, endTimestamp).
+		Group("channel_id, model_name, created_at")
+	if username != "" {
+		buckets = buckets.Where("username = ?", username)
+	}
+	rows := make([]ChannelQuotaData, 0)
+	err := DB.Table("(?) AS usage_buckets", buckets).
+		Select("usage_buckets.*, COALESCE(channels.name, '') AS channel_name").
+		Joins("LEFT JOIN channels ON channels.id = usage_buckets.channel_id").
+		Order("usage_buckets.created_at, usage_buckets.channel_id, usage_buckets.model_name").
+		Find(&rows).Error
+	return rows, err
+}
+
 func UpdateQuotaData() {
 	for {
 		if common.DataExportEnabled {

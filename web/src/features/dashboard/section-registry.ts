@@ -35,6 +35,12 @@ const DASHBOARD_SECTIONS = [
     build: () => null,
   },
   {
+    id: 'channels',
+    titleKey: 'Channel Analytics',
+    adminOnly: true,
+    build: () => null,
+  },
+  {
     id: 'flow',
     titleKey: 'Flow',
     build: () => null,
@@ -49,7 +55,10 @@ const DASHBOARD_SECTIONS = [
 
 export type DashboardSectionId = (typeof DASHBOARD_SECTIONS)[number]['id']
 
-const ADMIN_ONLY_SECTIONS = new Set<string>(['users'])
+export function canViewDashboardSection(section: string, isAdmin: boolean) {
+  const definition = DASHBOARD_SECTIONS.find((item) => item.id === section)
+  return !!definition && (!('adminOnly' in definition) || isAdmin)
+}
 
 const dashboardRegistry = createSectionRegistry<
   DashboardSectionId,
@@ -64,6 +73,7 @@ const dashboardRegistry = createSectionRegistry<
 
 export const DASHBOARD_SECTION_IDS = dashboardRegistry.sectionIds
 export const DASHBOARD_DEFAULT_SECTION = dashboardRegistry.defaultSection
+export const getDashboardSectionMeta = dashboardRegistry.getSectionMeta
 
 export function getDashboardSectionNavItems(
   t: TFunction,
@@ -71,7 +81,7 @@ export function getDashboardSectionNavItems(
 ) {
   const all = dashboardRegistry.getSectionNavItems(t)
   if (options?.isAdmin) return all
-  return all.filter(
-    (_, idx) => !ADMIN_ONLY_SECTIONS.has(DASHBOARD_SECTIONS[idx].id)
+  return all.filter((_, idx) =>
+    canViewDashboardSection(DASHBOARD_SECTIONS[idx].id, false)
   )
 }

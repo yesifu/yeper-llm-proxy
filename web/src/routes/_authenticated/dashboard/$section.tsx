@@ -20,9 +20,12 @@ import { createFileRoute, redirect } from '@tanstack/react-router'
 
 import { Dashboard } from '@/features/dashboard'
 import {
+  canViewDashboardSection,
   DASHBOARD_SECTION_IDS,
   DASHBOARD_DEFAULT_SECTION,
 } from '@/features/dashboard/section-registry'
+import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
 
 export const Route = createFileRoute('/_authenticated/dashboard/$section')({
   beforeLoad: ({ params }) => {
@@ -32,6 +35,10 @@ export const Route = createFileRoute('/_authenticated/dashboard/$section')({
         to: '/dashboard/$section',
         params: { section: DASHBOARD_DEFAULT_SECTION },
       })
+    }
+    const role = useAuthStore.getState().auth.user?.role ?? ROLE.GUEST
+    if (!canViewDashboardSection(params.section, role >= ROLE.ADMIN)) {
+      throw redirect({ to: '/403' })
     }
   },
   component: Dashboard,

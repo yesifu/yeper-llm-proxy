@@ -17,8 +17,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
+import { requireServerSuccess } from '@/lib/server-error-message'
 
 import type {
+  ChannelUsageRow,
   FlowQuotaDataItem,
   QuotaDataItem,
   UptimeGroupResult,
@@ -49,6 +51,18 @@ export async function getUserQuotaDates(
     { params }
   )
   return res.data
+}
+
+export async function getChannelUsage(params: {
+  start_timestamp: number
+  end_timestamp: number
+  username?: string
+}) {
+  const res = await api.get<{ success: boolean; data: ChannelUsageRow[] }>(
+    '/api/data/channels',
+    { params }
+  )
+  return requireServerSuccess(res.data).data
 }
 
 // ----------------------------------------------------------------------------

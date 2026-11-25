@@ -50,6 +50,18 @@ export interface FlowQuotaDataItem {
   quota?: number
 }
 
+export interface ChannelUsageRow {
+  channel_id: number
+  channel_name: string
+  model_name: string
+  created_at: number
+  count: number
+  token_used: number
+  quota: number
+  cache_read_tokens: number
+  cache_creation_tokens: number
+}
+
 export type FlowMetric = 'quota' | 'tokens' | 'requests'
 
 export type FlowOverflowMode = 'aggregate' | 'hide'

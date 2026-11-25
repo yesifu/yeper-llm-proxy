@@ -4,8 +4,39 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGetChannelQuotaData(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&Channel{Id: 1, Name: "east"}).Error)
+	require.NoError(t, DB.Create(&[]QuotaData{
+		{ChannelID: 1, ModelName: "a", CreatedAt: 3600, Username: "alice", Count: 2, TokenUsed: 8, CacheReadTokens: 2},
+		{ChannelID: 1, ModelName: "a", CreatedAt: 3600, Username: "bob", Count: 1, TokenUsed: 7, CacheReadTokens: 3, CacheCreationTokens: 4},
+		{ChannelID: 1, ModelName: "b", CreatedAt: 3600, Username: "alice", Count: 1, Quota: 6},
+		{ChannelID: 7, ModelName: "a", CreatedAt: 3600, Username: "alice", Count: 1, Quota: 9},
+		{ChannelID: 0, ModelName: "a", CreatedAt: 3600, Count: 1},
+		{ChannelID: 1, ModelName: "a", CreatedAt: 7200, Username: "alice", Count: 4},
+		{ChannelID: 1, ModelName: "a", CreatedAt: 10800, Username: "alice", Count: 5},
+	}).Error)
+
+	rows, err := GetChannelQuotaData(3600, 7200, "")
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []ChannelQuotaData{
+		{ChannelID: 1, ChannelName: "east", ModelName: "a", CreatedAt: 3600, Count: 3, TokenUsed: 15, CacheReadTokens: 5, CacheCreationTokens: 4},
+		{ChannelID: 1, ChannelName: "east", ModelName: "b", CreatedAt: 3600, Count: 1, Quota: 6},
+		{ChannelID: 7, ModelName: "a", CreatedAt: 3600, Count: 1, Quota: 9},
+		{ChannelID: 0, ModelName: "a", CreatedAt: 3600, Count: 1},
+		{ChannelID: 1, ChannelName: "east", ModelName: "a", CreatedAt: 7200, Count: 4},
+	}, rows)
+
+	rows, err = GetChannelQuotaData(3600, 7200, "bob")
+	require.NoError(t, err)
+	assert.Equal(t, []ChannelQuotaData{
+		{ChannelID: 1, ChannelName: "east", ModelName: "a", CreatedAt: 3600, Count: 1, TokenUsed: 7, CacheReadTokens: 3, CacheCreationTokens: 4},
+	}, rows)
+}
 
 func seedFlowQuotaData(t *testing.T, quotaData QuotaData) {
 	t.Helper()

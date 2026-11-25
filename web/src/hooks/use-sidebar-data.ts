@@ -82,6 +82,11 @@ export function useSidebarData(badges: SidebarBadges = {}): SidebarData {
           {
             title: t('Dashboard'),
             url: '/dashboard/models',
+            activeUrls: [
+              '/dashboard/channels',
+              '/dashboard/flow',
+              '/dashboard/users',
+            ],
             icon: LayoutDashboard,
           },
           {
