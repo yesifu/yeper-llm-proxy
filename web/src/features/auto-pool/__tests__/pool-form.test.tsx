@@ -152,7 +152,7 @@ describe('Auto pool editor', () => {
       )
     )
   })
-  it('does not probe paused members or show a known capacity when Redis is unavailable', () => {
+  it('shows the configured limit when Redis is unavailable and keeps paused probes disabled', () => {
     renderForm({
       ...data,
       config: {
@@ -162,7 +162,10 @@ describe('Auto pool editor', () => {
       runtime: [{ ...data.runtime[0], in_flight: -1 }],
     })
     expect(screen.getByRole('button', { name: 'Probe now' })).toBeDisabled()
-    expect(screen.getByRole('row', { name: /qwen/ })).toHaveTextContent('- / 2')
+    const row = within(screen.getByRole('row', { name: /qwen/ }))
+    expect(row.getByRole('cell', { name: '2' })).toBeVisible()
+    expect(row.getByRole('cell', { name: '-' })).toBeVisible()
+    expect(row.queryByRole('progressbar')).not.toBeInTheDocument()
     expect(screen.queryByText('Safe to reclaim')).not.toBeInTheDocument()
   })
   it('keeps pending edits and disables probes when a save is rejected', async () => {
@@ -181,6 +184,7 @@ describe('Auto pool editor', () => {
       'Pool save failed'
     )
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
+    expect(screen.getByRole('cell', { name: '200' })).toBeVisible()
     await user.click(screen.getByRole('button', { name: 'Edit' }))
     expect(screen.getByLabelText('Weight')).toHaveValue(200)
   })
@@ -568,12 +572,14 @@ describe('Auto pool editor', () => {
         ],
       },
     })
-    const first = within(screen.getByRole('row', { name: /qwen/ }))
-    await user.click(first.getByRole('button', { name: 'Edit' }))
+    const first = () => within(screen.getByRole('row', { name: /qwen/ }))
+    await user.click(first().getByRole('button', { name: 'Edit' }))
     await user.clear(screen.getByLabelText('Concurrency limit'))
     await user.type(screen.getByLabelText('Concurrency limit'), '4')
     await user.click(screen.getByRole('button', { name: 'Done' }))
     const second = within(screen.getByRole('row', { name: /model-two/ }))
+    expect(first().getByRole('cell', { name: '4' })).toBeVisible()
+    expect(second.getByRole('cell', { name: '4' })).toBeVisible()
     await user.click(second.getByRole('button', { name: 'Edit' }))
     expect(screen.getByLabelText('Concurrency limit')).toHaveValue(4)
     await user.click(screen.getByRole('button', { name: 'Done' }))

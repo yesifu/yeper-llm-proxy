@@ -160,6 +160,17 @@ export function useMemberColumns() {
         ),
       },
       {
+        id: 'weight',
+        header: t('Weight'),
+        cell: ({ row }) => formatNumber(row.original.member.weight, locale),
+      },
+      {
+        id: 'concurrency-limit',
+        header: t('Concurrency limit'),
+        cell: ({ row }) =>
+          formatNumber(row.original.member.max_concurrency, locale),
+      },
+      {
         id: 'capacity',
         header: t('Active requests'),
         cell: ({ row: { original } }) => {
@@ -167,16 +178,8 @@ export function useMemberColumns() {
           const active = original.runtime?.in_flight
           const known = active !== undefined && active >= 0
           return (
-            <div
-              className='w-20 max-w-full space-y-1.5 tabular-nums'
-              title={`${t('Concurrency limit')}: ${formatNumber(limit, locale)}`}
-            >
-              <div>
-                {formatNumber(known ? active : undefined, locale)}{' '}
-                <span className='text-muted-foreground'>
-                  / {formatNumber(limit, locale)}
-                </span>
-              </div>
+            <div className='w-20 max-w-full space-y-1.5 tabular-nums'>
+              <div>{formatNumber(known ? active : undefined, locale)}</div>
               {known && limit > 0 && (
                 <Progress
                   aria-label={t('Active requests')}

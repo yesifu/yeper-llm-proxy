@@ -71,6 +71,35 @@ const props = {
 }
 
 describe('Pool member list', () => {
+  it('shows the configured weight and concurrency limit for each node in the table', () => {
+    const second = {
+      ...member,
+      id: 'gpu-b',
+      channel_model: 'slow-chat',
+      weight: 0,
+      max_concurrency: 8,
+    }
+    render(<MemberList {...props} members={[member, second]} />)
+
+    expect(screen.getByRole('columnheader', { name: 'Weight' })).toBeVisible()
+    expect(
+      screen.getByRole('columnheader', { name: 'Concurrency limit' })
+    ).toBeVisible()
+    const firstRow = within(screen.getByRole('row', { name: /fast-chat/ }))
+    expect(firstRow.getByRole('cell', { name: '100' })).toBeVisible()
+    expect(firstRow.getByRole('cell', { name: '2' })).toBeVisible()
+    expect(firstRow.getByText('1')).toBeVisible()
+    expect(
+      firstRow.getByRole('progressbar', {
+        name: 'Active requests',
+        value: { now: 1, max: 2 },
+      })
+    ).toBeVisible()
+    const secondRow = within(screen.getByRole('row', { name: /slow-chat/ }))
+    expect(secondRow.getByRole('cell', { name: '0' })).toBeVisible()
+    expect(secondRow.getByRole('cell', { name: '8' })).toBeVisible()
+  })
+
   it('updates the heartbeat and its edge when the same node receives new probe data', () => {
     const view = render(<MemberList {...props} />)
     const row = () => screen.getByRole('row', { name: /fast-chat/ })
@@ -114,6 +143,21 @@ describe('Pool member list', () => {
     expect(item.getByText('Healthy')).toBeVisible()
     await user.click(item.getByRole('button', { name: 'Probe now' }))
     expect(props.onProbe).toHaveBeenCalledWith('gpu-a')
+  })
+
+  it('shows labeled weight and concurrency values in the mobile card layout', () => {
+    const original = window.matchMedia
+    vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
+      ...original(query),
+      matches: query === '(max-width: 640px)' || original(query).matches,
+    }))
+    render(<MemberList {...props} />)
+
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+    expect(screen.getByText('Weight')).toBeVisible()
+    expect(screen.getByText('100')).toBeVisible()
+    expect(screen.getByText('Concurrency limit')).toBeVisible()
+    expect(screen.getByText('2')).toBeVisible()
   })
 
   it('combines channel, alias or model search with heartbeat filtering', async () => {
