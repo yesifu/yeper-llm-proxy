@@ -150,6 +150,13 @@ export function PoolForm(props: { data: AutoPoolData }) {
             onProbe={(id) => probe.mutate(id)}
             onEdit={setEditing}
             onRemove={setRemoving}
+            onEnabledChange={(index, enabled) =>
+              form.setValue(
+                `members.${index}.state`,
+                enabled ? 'accepting' : 'paused',
+                { shouldDirty: true }
+              )
+            }
           />
         </fieldset>
         {save.isError && (

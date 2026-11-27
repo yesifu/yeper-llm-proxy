@@ -558,6 +558,7 @@
     "Allowed Ports": "Allowed Ports",
     "Allowed range: {{min}} to {{max}}": "Allowed range: {{min}} to {{max}}",
     "Allows selected fields to be overwritten after a sync preview. No automatic synchronization.": "Allows selected fields to be overwritten after a sync preview. No automatic synchronization.",
+    "Already added": "Already added",
     "Already checked in today": "Already checked in today",
     "Already have an account?": "Already have an account?",
     "Also remove custom pricing": "Also remove custom pricing",

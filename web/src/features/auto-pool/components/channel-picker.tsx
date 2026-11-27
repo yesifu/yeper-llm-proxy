@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Dialog } from '@/components/dialog'
@@ -49,11 +49,31 @@ export function ChannelPicker(props: Props) {
   const { t } = useTranslation()
   const [channelID, setChannelID] = useState<string>('')
   const [selectedModels, setSelectedModels] = useState<string[]>([])
-  const channel = props.channels.find((item) => String(item.id) === channelID)
-  const models = channel ? availablePoolModels(channel, props.members) : []
-  const selected = selectedModels.filter((value) =>
-    models.some((model) => model.name === value)
+  const channelOptions = useMemo(
+    () =>
+      props.channels.map((channel) => {
+        const available = availablePoolModels(channel, props.members).map(
+          (model) => model.name
+        )
+        const fullyAdded = channel.models.length > 0 && available.length === 0
+        return {
+          value: String(channel.id),
+          label: channel.name,
+          description:
+            fullyAdded && channel.compatible
+              ? t('All models from this channel are already in the pool.')
+              : channelUnavailableMessage(channel, t),
+          disabled: fullyAdded,
+          channel,
+          available,
+        }
+      }),
+    [props.channels, props.members, t]
   )
+  const choice = channelOptions.find((option) => option.value === channelID)
+  const channel = choice?.channel
+  const available = new Set(choice?.available)
+  const selected = selectedModels.filter((value) => available.has(value))
   const exceedsLimit = props.members.length + selected.length > 256
   const canAdd =
     channel?.compatible &&
@@ -111,23 +131,16 @@ export function ChannelPicker(props: Props) {
               <Combobox
                 id='pool-channel-choice'
                 aria-label={t('Channel')}
-                options={props.channels.map((item) => ({
-                  value: String(item.id),
-                  label: item.name,
-                  description: channelUnavailableMessage(item, t),
-                }))}
+                options={channelOptions}
                 value={channelID}
                 placeholder={t('Select a channel')}
                 onValueChange={(value) => {
                   setChannelID(value ?? '')
-                  const next = props.channels.find(
-                    (item) => String(item.id) === value
+                  const next = channelOptions.find(
+                    (item) => item.value === value
                   )
-                  const available = next
-                    ? availablePoolModels(next, props.members)
-                    : []
                   setSelectedModels(
-                    available.length === 1 ? [available[0].name] : []
+                    next?.available.length === 1 ? next.available : []
                   )
                 }}
               />
@@ -137,12 +150,12 @@ export function ChannelPicker(props: Props) {
                 {channelUnavailableMessage(channel, t)}
               </p>
             )}
-            {channel?.compatible && models.length === 0 && (
+            {channel?.compatible && available.size === 0 && (
               <p role='status' className='text-muted-foreground text-sm'>
                 {t('All models from this channel are already in the pool.')}
               </p>
             )}
-            {channel?.compatible && models.length > 0 && (
+            {channel?.compatible && available.size > 0 && (
               <Field>
                 <FieldLabel htmlFor='pool-model-choice'>
                   {t('Models')}
@@ -153,23 +166,26 @@ export function ChannelPicker(props: Props) {
                   selected={selected}
                   onChange={setSelectedModels}
                   maxVisibleChips={6}
-                  options={models.map((model) => ({
-                    value: model.name,
-                    label: model.name,
-                    hint:
+                  options={channel.models.map((model) => {
+                    const added = !available.has(model.name)
+                    const mapping =
                       model.name !== model.actual_model
                         ? model.actual_model
-                        : undefined,
-                  }))}
+                        : undefined
+                    return {
+                      value: model.name,
+                      label: model.name,
+                      disabled: added,
+                      hint: added ? t('Already added') : mapping,
+                    }
+                  })}
                 />
                 <Button
                   type='button'
                   variant='ghost'
                   size='sm'
                   className='w-fit'
-                  onClick={() =>
-                    setSelectedModels(models.map((model) => model.name))
-                  }
+                  onClick={() => setSelectedModels([...available])}
                 >
                   {t('All available models')}
                 </Button>

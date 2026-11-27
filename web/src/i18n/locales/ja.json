@@ -558,6 +558,7 @@
     "Allowed Ports": "許可するポート",
     "Allowed range: {{min}} to {{max}}": "入力できる範囲：{{min}}〜{{max}}",
     "Allows selected fields to be overwritten after a sync preview. No automatic synchronization.": "同期プレビュー後に選択した項目の上書きを許可します。自動同期は行いません。",
+    "Already added": "追加済み",
     "Already checked in today": "本日はすでにチェックイン済みです",
     "Already have an account?": "アカウントをお持ちの方？",
     "Also remove custom pricing": "カスタム料金設定も削除",

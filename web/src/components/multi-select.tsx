@@ -42,6 +42,7 @@ import { cn } from '@/lib/utils'
 export type Option = {
   label: string
   value: string
+  disabled?: boolean
   /**
    * Secondary text shown beside the option in the dropdown. Chips for hinted
    * values also carry a marker icon whose tooltip repeats the hint.
@@ -139,6 +140,15 @@ export function MultiSelect(props: MultiSelectProps) {
     () => new Set(props.selected),
     [props.selected]
   )
+  const disabledValues = React.useMemo(
+    () =>
+      new Set(
+        props.options
+          .filter((option) => option.disabled)
+          .map((option) => option.value)
+      ),
+    [props.options]
+  )
 
   // Lookup of value -> display label so chips and items can show friendly names
   // even when the underlying option list changes (e.g. custom-added values).
@@ -201,14 +211,14 @@ export function MultiSelect(props: MultiSelectProps) {
       for (const raw of values) {
         const value = raw.trim()
         if (!value) continue
-        if (seen.has(value)) continue
+        if (seen.has(value) || disabledValues.has(value)) continue
         seen.add(value)
         next.push(value)
       }
       if (next.length === 0) return
       props.onChange([...props.selected, ...next])
     },
-    [props]
+    [props, disabledValues]
   )
 
   const handleInputValueChange = (value: string) => {
@@ -428,6 +438,7 @@ export function MultiSelect(props: MultiSelectProps) {
                 <ComboboxItem
                   key={item}
                   value={item}
+                  disabled={disabledValues.has(item)}
                   className={isCreate ? 'text-foreground' : undefined}
                   aria-description={hint}
                 >

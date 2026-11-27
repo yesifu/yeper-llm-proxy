@@ -26,6 +26,7 @@ import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import { IconBadge } from '@/components/ui/icon-badge'
 import { Progress } from '@/components/ui/progress'
+import { Switch } from '@/components/ui/switch'
 import { toIntlLocale } from '@/i18n/languages'
 import { formatNumber, formatTimestampToDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -44,6 +45,7 @@ export type MemberRow = {
   onProbe: () => void
   onEdit: () => void
   onRemove: () => void
+  onEnabledChange: (enabled: boolean) => void
 }
 
 const tones = {
@@ -190,6 +192,21 @@ export function useMemberColumns() {
             </div>
           )
         },
+      },
+      {
+        id: 'enabled',
+        header: t('Enabled'),
+        cell: ({ row: { original } }) => (
+          <Switch
+            nativeButton
+            render={<button type='button' />}
+            aria-label={t('Enable {{name}}', {
+              name: `${original.channelName} · ${original.member.channel_model || original.member.actual_model}`,
+            })}
+            checked={original.member.state === 'accepting'}
+            onCheckedChange={original.onEnabledChange}
+          />
+        ),
       },
       {
         id: 'actions',

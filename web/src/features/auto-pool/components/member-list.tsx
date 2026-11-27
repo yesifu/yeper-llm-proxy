@@ -47,6 +47,7 @@ type Props = {
   onProbe: (id: string) => void
   onEdit: (index: number) => void
   onRemove: (index: number) => void
+  onEnabledChange: (index: number, enabled: boolean) => void
 }
 
 const healthEdges = {
@@ -107,6 +108,7 @@ export function MemberList(props: Props) {
       onProbe: () => props.onProbe(member.id),
       onEdit: () => props.onEdit(index),
       onRemove: () => props.onRemove(index),
+      onEnabledChange: (enabled) => props.onEnabledChange(index, enabled),
     })
   })
 

@@ -558,6 +558,7 @@
     "Allowed Ports": "Ports autorisés",
     "Allowed range: {{min}} to {{max}}": "Plage autorisée : de {{min}} à {{max}}",
     "Allows selected fields to be overwritten after a sync preview. No automatic synchronization.": "Autorise l’écrasement des champs sélectionnés après aperçu. Aucune synchronisation automatique.",
+    "Already added": "Déjà ajouté",
     "Already checked in today": "Vous avez déjà fait l'enregistrement aujourd'hui",
     "Already have an account?": "Vous avez déjà un compte ?",
     "Also remove custom pricing": "Supprimer aussi les prix personnalisés",

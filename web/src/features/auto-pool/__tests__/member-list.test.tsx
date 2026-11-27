@@ -68,6 +68,7 @@ const props = {
   onEdit: vi.fn(),
   onRemove: vi.fn(),
   onProbe: vi.fn(),
+  onEnabledChange: vi.fn(),
 }
 
 describe('Pool member list', () => {
@@ -126,7 +127,7 @@ describe('Pool member list', () => {
     expect(within(row()).getByText('Not checked')).toBeVisible()
   })
 
-  it('keeps heartbeat status and probe action accessible in the mobile card layout', async () => {
+  it('keeps heartbeat status and member controls accessible in the mobile card layout', async () => {
     const original = window.matchMedia
     vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
       ...original(query),
@@ -143,6 +144,10 @@ describe('Pool member list', () => {
     expect(item.getByText('Healthy')).toBeVisible()
     await user.click(item.getByRole('button', { name: 'Probe now' }))
     expect(props.onProbe).toHaveBeenCalledWith('gpu-a')
+    const toggle = item.getByRole('switch', { name: /H20 cluster.*fast-chat/ })
+    expect(toggle).toBeChecked()
+    await user.click(toggle)
+    expect(props.onEnabledChange).toHaveBeenCalledWith(0, false)
   })
 
   it('shows labeled weight and concurrency values in the mobile card layout', () => {

@@ -558,6 +558,7 @@
     "Allowed Ports": "允許的端口",
     "Allowed range: {{min}} to {{max}}": "可填範圍：{{min}} 至 {{max}}",
     "Allows selected fields to be overwritten after a sync preview. No automatic synchronization.": "允許在預覽確認後覆寫所選欄位，不會自動同步。",
+    "Already added": "已新增",
     "Already checked in today": "今日已簽到",
     "Already have an account?": "已有用戶？",
     "Also remove custom pricing": "同時移除自訂定價",

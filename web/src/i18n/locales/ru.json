@@ -558,6 +558,7 @@
     "Allowed Ports": "Разрешенные порты",
     "Allowed range: {{min}} to {{max}}": "Допустимый диапазон: от {{min}} до {{max}}",
     "Allows selected fields to be overwritten after a sync preview. No automatic synchronization.": "Разрешает перезапись выбранных полей после просмотра. Автоматическая синхронизация не выполняется.",
+    "Already added": "Уже добавлено",
     "Already checked in today": "Вы уже отметились сегодня",
     "Already have an account?": "Уже есть аккаунт?",
     "Also remove custom pricing": "Также удалить пользовательские цены",

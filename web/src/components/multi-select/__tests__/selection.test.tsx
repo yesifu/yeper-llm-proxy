@@ -25,6 +25,7 @@ import { MultiSelect } from '@/components/multi-select'
 
 const options = [
   { value: 'a', label: 'a' },
+  { value: 'banned', label: 'Unavailable option', disabled: true },
   { value: 'c', label: 'c' },
 ]
 
@@ -50,6 +51,16 @@ function Fixture(props: {
 }
 
 describe('multi-select batch paste', () => {
+  it('skips disabled options when creating values from a batch', async () => {
+    const user = userEvent.setup()
+    render(<Fixture />)
+    await user.click(screen.getByRole('combobox'))
+    await user.paste('banned,custom')
+    expect(screen.getByLabelText('Selected values')).toHaveTextContent(
+      /^custom$/
+    )
+  })
+
   it.each(['a,b,c', 'a，b，c', 'a\nb\nc', 'a\r\nb\r\nc'])(
     'adds every pasted value including the final item without a trailing separator: %j',
     async (text) => {

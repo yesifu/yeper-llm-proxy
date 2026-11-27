@@ -168,6 +168,66 @@ describe('Auto pool editor', () => {
     expect(row.queryByRole('progressbar')).not.toBeInTheDocument()
     expect(screen.queryByText('Safe to reclaim')).not.toBeInTheDocument()
   })
+  it('saves the toggled routing state for the selected member only', async () => {
+    const user = userEvent.setup()
+    const put = vi
+      .spyOn(api, 'put')
+      .mockImplementation(async (_url, config) => ({
+        data: { success: true, data: { config, runtime: [] } },
+      }))
+    const draining = {
+      ...data.config.members[0],
+      id: 'gpu-b',
+      actual_model: 'kimi',
+      state: 'draining' as const,
+    }
+    renderForm({
+      ...data,
+      config: { ...data.config, members: [...data.config.members, draining] },
+    })
+    const name = 'Enable GPU server · qwen'
+    const toggle = await screen.findByRole('switch', { name })
+    expect(toggle).toBeChecked()
+    expect(screen.getByRole('switch', { name: /kimi/ })).not.toBeChecked()
+
+    toggle.focus()
+    await user.keyboard('[Space]')
+    expect(toggle).not.toBeChecked()
+    expect(put).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() =>
+      expect(put).toHaveBeenLastCalledWith('/api/auto_pool/', {
+        ...data.config,
+        members: [{ ...data.config.members[0], state: 'paused' }, draining],
+      })
+    )
+    await user.click(screen.getByRole('switch', { name }))
+    await user.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() =>
+      expect(put).toHaveBeenLastCalledWith('/api/auto_pool/', {
+        ...data.config,
+        members: [...data.config.members, draining],
+      })
+    )
+  })
+
+  it('restores the original draining state when enabling is discarded', async () => {
+    const user = userEvent.setup()
+    renderForm({
+      ...data,
+      config: {
+        ...data.config,
+        members: [{ ...data.config.members[0], state: 'draining' }],
+      },
+    })
+    const toggle = await screen.findByRole('switch', { name: /qwen/ })
+    await user.click(toggle)
+    expect(screen.getByText('Accepting requests')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Discard changes' }))
+    expect(screen.getByText('Draining')).toBeVisible()
+    expect(screen.getByRole('switch', { name: /qwen/ })).not.toBeChecked()
+  })
+
   it('keeps pending edits and disables probes when a save is rejected', async () => {
     const user = userEvent.setup()
     vi.spyOn(api, 'put').mockResolvedValue({
@@ -312,6 +372,16 @@ describe('Auto pool editor', () => {
     expect(
       screen.getByRole('button', { name: 'Add selected models' })
     ).toBeDisabled()
+    const models = screen.getByRole('combobox', { name: 'Select models' })
+    await user.click(models)
+    const existing = await screen.findByRole('option', { name: 'qwen' })
+    expect(existing).toHaveAttribute('aria-disabled', 'true')
+    await user.click(existing)
+    await user.type(models, 'qwen')
+    await user.keyboard('{ArrowDown}{Enter}{Escape}')
+    expect(
+      screen.getByRole('button', { name: 'Add selected models' })
+    ).toBeDisabled()
     await user.click(
       screen.getByRole('button', { name: 'All available models' })
     )
@@ -372,6 +442,14 @@ describe('Auto pool editor', () => {
         data: [
           {
             ...channel,
+            name: 'Paused GPU',
+            compatible: false,
+            incompatibility_reason: 'disabled',
+          },
+          {
+            ...channel,
+            id: 2,
+            models: [],
             compatible: false,
             incompatibility_reason: 'unsupported_routes',
           },
@@ -381,6 +459,9 @@ describe('Auto pool editor', () => {
     renderForm()
     await user.click(screen.getByRole('button', { name: 'Add from channels' }))
     await user.click(await screen.findByRole('combobox', { name: 'Channel' }))
+    const paused = await screen.findByRole('option', { name: /Paused GPU/ })
+    expect(paused).toHaveAttribute('aria-disabled', 'true')
+    expect(paused).toHaveTextContent('This channel is disabled.')
     await user.click(await screen.findByRole('option', { name: /GPU server/ }))
     expect(
       within(screen.getByRole('dialog')).getByRole('status')
@@ -491,20 +572,28 @@ describe('Auto pool editor', () => {
     ).toBeEnabled()
   })
 
-  it('shows already pooled feedback instead of creating duplicate members', async () => {
+  it('keeps fully added channels visible but unavailable when searching or selecting by keyboard', async () => {
     const user = userEvent.setup()
+    vi.spyOn(api, 'get').mockResolvedValue({
+      data: {
+        success: true,
+        data: [channel, { ...channel, id: 2, name: 'Other GPU' }],
+      },
+    })
     renderForm()
     await user.click(screen.getByRole('button', { name: 'Add from channels' }))
-    await user.click(await screen.findByRole('combobox', { name: 'Channel' }))
-    await user.click(await screen.findByRole('option', { name: /GPU server/ }))
-    expect(
-      await screen.findByText(
-        'All models from this channel are already in the pool.'
-      )
-    ).toBeVisible()
+    const channels = await screen.findByRole('combobox', { name: 'Channel' })
+    await user.type(channels, 'GPU')
+    const existing = await screen.findByRole('option', { name: /GPU server/ })
+    expect(existing).toBeVisible()
+    expect(existing).toHaveAttribute('aria-disabled', 'true')
+    await user.click(existing)
+    expect(channels).toHaveValue('GPU')
+    await user.keyboard('{ArrowDown}{Enter}')
+    expect(channels).toHaveValue('Other GPU')
     expect(
       screen.getByRole('button', { name: 'Add selected models' })
-    ).toBeDisabled()
+    ).toBeEnabled()
   })
 
   it('keeps existing member edits when the channel catalog fails and allows retry', async () => {

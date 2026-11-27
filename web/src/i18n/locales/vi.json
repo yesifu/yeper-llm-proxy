@@ -558,6 +558,7 @@
     "Allowed Ports": "Cổng được phép",
     "Allowed range: {{min}} to {{max}}": "Phạm vi cho phép: {{min}} đến {{max}}",
     "Allows selected fields to be overwritten after a sync preview. No automatic synchronization.": "Cho phép ghi đè các trường đã chọn sau khi xem trước. Không tự động đồng bộ.",
+    "Already added": "Đã thêm",
     "Already checked in today": "Hôm nay bạn đã điểm danh",
     "Already have an account?": "Đã có tài khoản?",
     "Also remove custom pricing": "Đồng thời xóa giá tùy chỉnh",
